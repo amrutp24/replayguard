@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "replayguard"
+version = "0.1.0"
+description = "Determinism checker for AWS Lambda durable functions"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+typescript = ["tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
+dev = ["pytest>=8", "tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
+
+[project.scripts]
+replayguard = "replayguard.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/replayguard"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
