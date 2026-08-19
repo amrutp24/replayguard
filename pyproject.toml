@@ -11,7 +11,9 @@ dependencies = []
 
 [project.optional-dependencies]
 typescript = ["tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
-dev = ["pytest>=8", "tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
+java = ["tree-sitter>=0.25", "tree-sitter-java>=0.23"]
+all = ["tree-sitter>=0.25", "tree-sitter-typescript>=0.23", "tree-sitter-java>=0.23"]
+dev = ["pytest>=8", "tree-sitter>=0.25", "tree-sitter-typescript>=0.23", "tree-sitter-java>=0.23"]
 
 [project.scripts]
 replayguard = "replayguard.cli:main"

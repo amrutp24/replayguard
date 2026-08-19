@@ -37,22 +37,31 @@ def text(findings: Sequence[Finding], root: str | None = None, verbose: bool = F
     if not findings:
         return "replayguard: no determinism violations found."
 
-    lines: list[str] = []
-    current_file = None
+    # Group by file, because findings arrive sorted by severity and a file's
+    # rows are therefore not contiguous -- printing them in arrival order
+    # repeats the same filename header once per severity band.
+    #
+    # Files keep the order of their most severe finding, so the worst file is
+    # still first, but within a file rows run in line order the way every other
+    # linter presents them.
+    grouped: dict[str, list[Finding]] = {}
     for f in findings:
-        if f.loc.file != current_file:
-            current_file = f.loc.file
-            lines.append("")
-            lines.append(_rel(current_file, root))
-        lines.append(
-            f"  {f.loc.line:>4}:{f.loc.col:<3} {f.severity.value:<7} "
-            f"{f.rule}  {f.message}"
-        )
-        if verbose:
-            if f.rationale:
-                lines.append(f"         why: {f.rationale}")
-            if f.fix:
-                lines.append(f"         fix: {f.fix}")
+        grouped.setdefault(f.loc.file, []).append(f)
+
+    lines: list[str] = []
+    for path, group in grouped.items():
+        lines.append("")
+        lines.append(_rel(path, root))
+        for f in sorted(group, key=lambda x: (x.loc.line, x.loc.col)):
+            lines.append(
+                f"  {f.loc.line:>4}:{f.loc.col:<3} {f.severity.value:<7} "
+                f"{f.rule}  {f.message}"
+            )
+            if verbose:
+                if f.rationale:
+                    lines.append(f"         why: {f.rationale}")
+                if f.fix:
+                    lines.append(f"         fix: {f.fix}")
 
     counts: dict[str, int] = {}
     for f in findings:

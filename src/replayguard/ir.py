@@ -25,6 +25,7 @@ from enum import Enum
 class Language(str, Enum):
     PYTHON = "python"
     TYPESCRIPT = "typescript"
+    JAVA = "java"
 
 
 class Region(str, Enum):

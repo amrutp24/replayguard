@@ -19,6 +19,7 @@ from .frontends import python_frontend
 
 _PY_EXT = {".py"}
 _TS_EXT = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs"}
+_JAVA_EXT = {".java"}
 
 _SKIP_DIRS = {
     "node_modules",
@@ -45,7 +46,7 @@ def _discover(paths: Iterable[str]) -> list[str]:
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             for fn in filenames:
                 ext = os.path.splitext(fn)[1]
-                if ext in _PY_EXT or ext in _TS_EXT:
+                if ext in _PY_EXT or ext in _TS_EXT or ext in _JAVA_EXT:
                     out.append(os.path.join(dirpath, fn))
     return sorted(out)
 
@@ -56,6 +57,10 @@ def _analyse(path: str) -> tuple[list[Finding], str | None]:
     try:
         if ext in _PY_EXT:
             module = python_frontend.parse_file(path)
+        elif ext in _JAVA_EXT:
+            from .frontends import java_frontend
+
+            module = java_frontend.parse_file(path)
         else:
             from .frontends import typescript_frontend
 
@@ -74,7 +79,10 @@ def _analyse(path: str) -> tuple[list[Finding], str | None]:
 def _cmd_check(args: argparse.Namespace) -> int:
     files = _discover(args.paths)
     if not files:
-        print("replayguard: no Python or TypeScript files found", file=sys.stderr)
+        print(
+            "replayguard: no Python, TypeScript, or Java files found",
+            file=sys.stderr,
+        )
         return 2
 
     all_findings: list[Finding] = []

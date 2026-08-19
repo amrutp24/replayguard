@@ -34,10 +34,10 @@ consequence.
 pip install replayguard
 ```
 
-TypeScript support needs a parser:
+TypeScript and Java need a parser:
 
 ```bash
-pip install 'replayguard[typescript]'
+pip install 'replayguard[all]'
 ```
 
 ## Use
@@ -82,27 +82,40 @@ tests/fixtures/python/bad_handler.py
 
 ## Language support
 
-| Runtime | Status | Notes |
-|---------|--------|-------|
+**All three runtimes with an official AWS durable execution SDK are supported.**
+
+| Runtime | Status | Parser |
+|---------|--------|--------|
 | Python | ✅ | stdlib `ast` |
 | TypeScript / JavaScript | ✅ | tree-sitter |
-| Java | ⬜ Planned | [official SDK](https://github.com/aws/aws-durable-execution-sdk-java) exists |
-| Rust, Go, .NET | ❌ Out of scope | No official durable execution SDK. Go and .NET have community PoCs only; Rust has none. |
+| Java | ✅ | tree-sitter |
+| Rust, Go, .NET | ❌ Out of scope | No official SDK. Go and .NET have community PoCs; Rust has none. |
 
-Python and JS don't just differ in syntax — they differ in shape:
+The three SDKs don't just differ in syntax — they differ in shape:
 
-| | Python | JS/TS |
+| | Handler | Step |
 |---|---|---|
-| Handler | `@durable_execution` | `withDurableExecution(fn)` |
-| Step | `context.step(fn, name="x")` | `context.step("x", fn)` |
+| Python | `@durable_execution` | `context.step(fn, name="x")` |
+| JS/TS | `withDurableExecution(fn)` | `context.step("x", fn)` |
+| Java | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)` |
 
-Both lower to one IR, so rules are written once. A frontend that needs a rule to
-know its language means the frontend didn't normalize enough.
+The callback is first, second, and third respectively — and Java also has a
+two-argument overload, so its body is located by *kind* rather than by position.
+All three lower to one IR, so rules are written once. A rule that needed to know
+its language would mean the frontend hadn't normalized enough.
 
-One real semantic difference *is* encoded per-frontend: in Python a bare `x = 1`
-inside a nested function creates a local binding, so it can never be an outer
-write. In JavaScript it writes straight through to the enclosing scope. RG003
-therefore has more ways to fire in JS.
+Genuine semantic differences *are* encoded per-frontend, and RG003 is where they
+show up:
+
+- **Python** — a bare `x = 1` in a nested function creates a local binding, so it
+  can never be an outer write. Only mutation and `global`/`nonlocal` reach out.
+- **JavaScript** — the same assignment writes straight through to the enclosing
+  scope, so RG003 has more ways to fire.
+- **Java** — captured locals must be effectively final, so reassigning one is a
+  *compile error* and that violation class cannot exist. What remains is
+  collection mutation and instance/static field writes.
+
+Three languages, three outer-write models, one rule.
 
 ## Design
 
@@ -125,10 +138,14 @@ unresolved regions rather than silently passing them.
 
 ## What it doesn't do
 
-Static analysis can't see nondeterminism inside a third-party library, data
+**Calls are not followed across function boundaries.** A handler that calls a
+private helper which does the I/O will not be flagged — analysis stops at the
+handler body. This is the largest known blind spot and is not covered by RG900.
+
+Static analysis also can't see nondeterminism inside a third-party library, data
 tainted several hops back, iteration order over an unordered collection, or
-concurrent completion order. It also can't tell you what happens when the
-platform changes underneath a suspended execution.
+concurrent completion order. It can't tell you what happens when the platform
+changes underneath a suspended execution either.
 
 Those need **dynamic replay-divergence checking**: run the workflow, force a
 replay, and diff the operation journals. Any difference is a determinism bug

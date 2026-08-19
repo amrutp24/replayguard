@@ -133,9 +133,68 @@ _TYPESCRIPT: dict[str, Category] = {
     "process.pid": Category.PROCESS,
 }
 
+_JAVA: dict[str, Category] = {
+    # clock
+    "System.currentTimeMillis": Category.CLOCK,
+    "System.nanoTime": Category.CLOCK,
+    "Instant.now": Category.CLOCK,
+    "LocalDate.now": Category.CLOCK,
+    "LocalTime.now": Category.CLOCK,
+    "LocalDateTime.now": Category.CLOCK,
+    "ZonedDateTime.now": Category.CLOCK,
+    "OffsetDateTime.now": Category.CLOCK,
+    "Calendar.getInstance": Category.CLOCK,
+    "Clock.systemUTC": Category.CLOCK,
+    "Clock.systemDefaultZone": Category.CLOCK,
+    "Date": Category.CLOCK,  # `new Date()` with no arguments
+    # random
+    "Math.random": Category.RANDOM,
+    "Random": Category.RANDOM,  # `new Random()` with no seed
+    "SecureRandom": Category.RANDOM,
+    "ThreadLocalRandom.current": Category.RANDOM,
+    # identity
+    "UUID.randomUUID": Category.IDENTITY,
+    # network
+    "HttpClient.newHttpClient": Category.NETWORK,
+    "URL.openConnection": Category.NETWORK,
+    "URL.openStream": Category.NETWORK,
+    "Socket": Category.NETWORK,
+    # filesystem
+    "Files.readAllBytes": Category.FILESYSTEM,
+    "Files.readString": Category.FILESYSTEM,
+    "Files.readAllLines": Category.FILESYSTEM,
+    "Files.write": Category.FILESYSTEM,
+    "Files.writeString": Category.FILESYSTEM,
+    "Files.delete": Category.FILESYSTEM,
+    "Files.createFile": Category.FILESYSTEM,
+    "Files.newBufferedReader": Category.FILESYSTEM,
+    "FileInputStream": Category.FILESYSTEM,
+    "FileOutputStream": Category.FILESYSTEM,
+    "FileReader": Category.FILESYSTEM,
+    "FileWriter": Category.FILESYSTEM,
+    # process
+    "Thread.currentThread": Category.PROCESS,
+    "ProcessHandle.current": Category.PROCESS,
+}
+
+#: Declared types whose instances are nondeterministic wholesale. `Random r`
+#: means every `r.nextInt()` is a random source, and the method names are too
+#: numerous to catalogue individually.
+JAVA_TAINTED_TYPES: dict[str, Category] = {
+    "Random": Category.RANDOM,
+    "SecureRandom": Category.RANDOM,
+    "ThreadLocalRandom": Category.RANDOM,
+    "HttpClient": Category.NETWORK,
+    "Socket": Category.NETWORK,
+    "URLConnection": Category.NETWORK,
+    "HttpURLConnection": Category.NETWORK,
+}
+
+
 _BY_LANGUAGE: dict[Language, dict[str, Category]] = {
     Language.PYTHON: _PYTHON,
     Language.TYPESCRIPT: _TYPESCRIPT,
+    Language.JAVA: _JAVA,
 }
 
 
@@ -153,6 +212,8 @@ def is_aws_sdk_call(language: Language, dotted: str) -> bool:
     """
     if language is Language.PYTHON:
         return dotted.startswith(("boto3.", "botocore."))
+    if language is Language.JAVA:
+        return dotted.startswith("software.amazon.awssdk")
     return dotted.startswith("@aws-sdk/") or dotted.endswith(".send")
 
 
