@@ -32,9 +32,34 @@ from ..ir import (
 #: Wrapper that marks a durable handler.
 _DURABLE_WRAPPERS = {"withDurableExecution", "durableExecution"}
 
-_STEP_METHODS = {"step", "waitForCallback", "wait_for_callback", "invoke", "parallel"}
+#: Every durable operation across the three SDKs, in both spellings. Derived
+#: from the real SDK surface, not guessed -- an unrecognised operation is worse
+#: than a missing rule, because its body then gets analysed in the wrong region
+#: and every legitimate in-step call is reported as a violation.
+_STEP_METHODS = {
+    "step", "stepAsync", "step_async",
+    "map", "mapAsync", "map_async",
+    "wait", "waitAsync", "wait_async",
+    "parallel",
+    "invoke", "invokeAsync", "invoke_async",
+    "runInChildContext", "runInChildContextAsync",
+    "run_in_child_context", "run_in_child_context_async",
+    "waitForCallback", "wait_for_callback",
+    "createCallback", "create_callback",
+    "withRetry", "withRetryAsync", "with_retry", "with_retry_async",
+    "waitForCondition", "wait_for_condition",
+}
 
-_CONTEXT_NAMES = {"context", "ctx", "durableContext", "dc"}
+def _is_context_name(name: str) -> bool:
+    """Is this identifier a durable context?
+
+    A fixed list of four names missed `childContext` from
+    `runInChildContext(async (childContext) => ...)`, so the child's steps were
+    not recognised and their bodies were analysed in the durable region. Child
+    and step contexts are named freely, so match on shape instead.
+    """
+    lowered = name.lower()
+    return "ctx" in lowered or "context" in lowered
 
 #: In-place mutators. `receipts.push(x)` inside a step body is the exact case
 #: AWS documents as silently lost on replay.
@@ -134,6 +159,28 @@ class _Src:
         return self.text(node) if node is not None and node.type == "identifier" else None
 
 
+#: Wrappers that sit between a call and its callee and must be seen through.
+_TRANSPARENT = {"await_expression", "parenthesized_expression", "non_null_expression"}
+
+
+def _unwrap(node):
+    """Strip wrappers from a callee.
+
+    `await context.step<T>(...)` parses with the *await_expression* as the
+    call's `function` field, wrapping the member expression -- a grammar quirk
+    that only shows up when a generic type argument is present. Without this,
+    every `await context.waitForCallback<T>(...)` went unrecognised and its body
+    was analysed in the durable region, which is exactly the false-positive
+    class this tool exists to avoid.
+    """
+    while node is not None and node.type in _TRANSPARENT:
+        named = [c for c in node.children if c.is_named]
+        if not named:
+            return node
+        node = named[-1]
+    return node
+
+
 def _descend(node, types: set[str]):
     """Yield descendants of the given types, without leaving nested functions."""
     for child in node.children:
@@ -181,15 +228,20 @@ class _ModuleContext:
                 self.aws_names.add(name)
 
     def _is_aws_derived(self, src: _Src, value) -> bool:
-        for node in [value, *_descend(value, {"identifier", "new_expression"})]:
-            name = src.root_name(node, {}) or (
-                src.text(node) if node.type == "identifier" else None
-            )
-            if name and name in self.aws_names:
-                return True
-            if name and name.endswith("Client"):
-                return True
-        return False
+        """True only for a direct `new SomethingClient(...)` construction.
+
+        Deliberately narrow. An earlier version treated any initializer
+        *mentioning* a client as a client, which propagated the taint into
+        response data: `response = await context.step(..., () => bedrock.send())`
+        then `output = response.output.message` made `output.content.find(...)`
+        -- an ordinary Array.prototype.find -- report as external I/O.
+
+        A client is a client. Its response is data.
+        """
+        if value is None or value.type != "new_expression":
+            return False
+        ctor = src.dotted(value.child_by_field_name("constructor"), {})
+        return bool(ctor) and ctor.split(".")[-1].endswith("Client")
 
 
 class _Walker:
@@ -211,6 +263,11 @@ class _Walker:
         if any(name in s for s in self.scopes[:-1]):
             return True
         return name in self.ctx.module_names
+
+    def _is_bound_local(self, name: str) -> bool:
+        """True when the name is a variable in scope, i.e. data rather than a
+        function passed by reference."""
+        return any(name in scope for scope in self.scopes)
 
     def _is_module_level(self, name: str) -> bool:
         return name in self.ctx.module_names and not any(
@@ -375,22 +432,32 @@ class _Walker:
         )
 
     def _try_durable_operation(self, node, region: Region) -> bool:
-        func = node.child_by_field_name("function")
+        func = _unwrap(node.child_by_field_name("function"))
         if func is None or func.type != "member_expression":
             return False
         prop = func.child_by_field_name("property")
         obj = func.child_by_field_name("object")
         if prop is None or self.src.text(prop) not in _STEP_METHODS:
             return False
-        if obj is None or obj.type != "identifier" or self.src.text(obj) not in _CONTEXT_NAMES:
+        if obj is None or obj.type != "identifier" or not _is_context_name(self.src.text(obj)):
             return False
 
         args = node.child_by_field_name("arguments")
         positional = [c for c in args.children if c.is_named] if args is not None else []
 
-        # JS puts the name first and the callback second — the reverse of Python.
+        # JS puts the name first and the callback second, the reverse of Python
+        # -- but options objects and extra arguments shift it, so the body is
+        # located by kind rather than by index, as in the other frontends.
         name_node = positional[0] if positional else None
-        body_node = positional[1] if len(positional) > 1 else None
+        body_node = next(
+            (
+                a
+                for a in positional
+                if a.type in _FUNCTION_NODES
+                or (a.type == "identifier" and self.src.text(a) in self.ctx.declared)
+            ),
+            None,
+        )
 
         name_literal, name_is_static, name_symbols = self._step_name(name_node)
         self.h.steps.append(
@@ -403,22 +470,42 @@ class _Walker:
             )
         )
 
-        # The name expression itself evaluates in the durable region, so any
-        # call inside it is a violation in its own right — not just a bad
-        # step name. Matches the Python frontend.
-        if name_node is not None and name_node.type != "string":
-            self.visit(name_node, region)
-        for extra in positional[2:]:
-            self.visit(extra, region)
+        # Everything that is not the body evaluates in the durable region --
+        # including a computed name expression, whose calls are violations in
+        # their own right and not merely a bad step name.
+        #
+        # `arg is not body_node` matters: operations without a name, such as
+        # `runInChildContext(fn)` and `context.step(fn)`, make positional[0]
+        # the body itself. Visiting it here as well walked the whole body twice,
+        # once in the wrong region, which reported every in-step call as a
+        # durable-region violation.
+        for arg in positional:
+            if arg is body_node:
+                continue
+            if arg is name_node and arg.type == "string":
+                continue
+            self.visit(arg, region)
 
         if body_node is None:
+            # An identifier that is not a known declaration and not a local is
+            # most likely a function from elsewhere; anything else is data.
+            # A callable passed by reference is a declaration or an import, so
+            # it is not bound as a local. A locally-bound name is data --
+            # `context.invoke(fn, payload)` passes a payload, not a body.
+            for arg in positional[1:]:
+                if arg.type == "member_expression":
+                    self.h.unresolved.append(self.src.loc(arg))
+                    break
+                if arg.type == "identifier" and not self._is_bound_local(
+                    self.src.text(arg)
+                ):
+                    self.h.unresolved.append(self.src.loc(arg))
+                    break
             return True
         if body_node.type in _FUNCTION_NODES:
             self.walk_function(body_node, Region.STEP_BODY)
-        elif body_node.type == "identifier" and self.src.text(body_node) in self.ctx.declared:
-            self.walk_function(self.ctx.declared[self.src.text(body_node)], Region.STEP_BODY)
         else:
-            self.h.unresolved.append(self.src.loc(body_node))
+            self.walk_function(self.ctx.declared[self.src.text(body_node)], Region.STEP_BODY)
         return True
 
     def _step_name(self, name_node) -> tuple[str | None, bool, list[str]]:

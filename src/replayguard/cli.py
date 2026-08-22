@@ -95,6 +95,17 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     min_conf = Confidence(args.min_confidence).rank
     all_findings = [f for f in all_findings if f.confidence.rank >= min_conf]
+
+    # Coverage notes are suppressed by default. On real repositories they
+    # outnumbered actual violations roughly 7:1 and buried them. They are never
+    # silently dropped -- the count is always reported -- so the tool still
+    # cannot imply a clean bill of health it has not earned.
+    suppressed = 0
+    if not args.show_coverage_gaps:
+        keep = [f for f in all_findings if f.severity is not Severity.NOTE]
+        suppressed = len(all_findings) - len(keep)
+        all_findings = keep
+
     all_findings.sort(key=lambda f: f.sort_key())
 
     renderer = report.FORMATS[args.format]
@@ -110,6 +121,15 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(f"replayguard: wrote {args.format} to {args.output}", file=sys.stderr)
     else:
         print(out)
+
+    # stderr, not stdout: --format json/sarif must stay machine-parseable, and
+    # this notice corrupted both when it was printed alongside the document.
+    if suppressed:
+        print(
+            f"replayguard: {suppressed} region(s) could not be resolved and "
+            "were not analysed. Re-run with --show-coverage-gaps to see them.",
+            file=sys.stderr,
+        )
 
     for err in errors:
         print(f"replayguard: {err}", file=sys.stderr)
@@ -156,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=["high", "medium", "low"],
         default="low",
         help="suppress findings below this confidence (default: low)",
+    )
+    check.add_argument(
+        "--show-coverage-gaps",
+        action="store_true",
+        help="include RG900 notes for code whose region could not be resolved",
     )
     check.add_argument("--root", default=os.getcwd(), help="base for relative paths")
     check.set_defaults(func=_cmd_check)

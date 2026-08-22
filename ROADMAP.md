@@ -46,7 +46,7 @@ only community proofs of concept.
 
 ---
 
-## M1 — Earn trust on real code
+## M1 — Earn trust on real code  *(validation run done 2026-08-19)*
 
 **The gate before anything is published.** A linter gets exactly one first
 impression. One false positive on someone's working handler and it is uninstalled
@@ -62,6 +62,48 @@ permanently.
 **Definition of done:** zero *unexplained* findings across every public repo
 above. Every remaining finding is either a defensible real bug or a documented,
 justified limitation.
+
+### Result of the first validation run
+
+Ran against AWS's own samples and all three official SDK repositories --
+751 source files. **145 findings became 34.** Every false positive was traced,
+fixed, and pinned with a regression test in `tests/test_real_world_regressions.py`.
+
+Seven bugs, none of which the hand-written fixtures could have caught, because
+the same person wrote both the fixtures and the frontends:
+
+1. **TS client taint reached response data.** `output.content.find(...)` --
+   an ordinary `Array.prototype.find` -- reported as external I/O because the
+   taint propagated from an SDK client through a step result into its response.
+2. **Python step bodies passed by keyword were missed.** AWS's own sample uses
+   `wait_for_callback(submitter=fn)`; only `args[0]` was checked, so the body
+   was analysed in the durable region.
+3. **The durable surface is far wider than `step`.** `stepAsync`, `withRetry`,
+   `map`, `wait`, `createCallback`, `runInChildContext` and their async variants
+   were all unrecognised -- 13 missing in Python and TypeScript, 8 in Java.
+4. **`await` + a generic type argument broke detection entirely.** tree-sitter
+   parses `await context.waitForCallback<T>(...)` with the *await_expression*
+   as the call's `function` field.
+5. **Child contexts were not contexts.** `runInChildContext(async (childContext)
+   => ...)` names its context freely; a fixed list of four receiver names missed it.
+6. **Unnamed operations had their body walked twice**, once in the wrong region.
+   `context.step(fn)` makes `positional[0]` the body itself.
+7. **RG900 buried everything.** Coverage notes outnumbered real findings 7:1.
+   Now suppressed by default with the count always reported, and the heuristic
+   tightened so data arguments are not mistaken for unresolved callables.
+
+**Remaining: 10 findings, all RG001, all read by hand and believed genuine** --
+`System.nanoTime` and `Instant.now` in the durable region of Java SDK examples,
+`datetime.now()` feeding `completed_at` in the FSI payment sample, `new Date()`
+in the retail order sample, and ``task-${Date.now()}`` building a task id in the
+AutonomousCodingAgent sample. That last one is the most consequential: the id
+changes on every replay.
+
+All are literal violations of AWS's documented rule. Most flow only into a
+returned payload, so consequences are limited; the task-id case is not.
+
+**Still open before M2:** interprocedural analysis. 24 coverage notes remain,
+concentrated on `map` handlers whose bodies are module-level functions.
 
 **Why first:** it is cheap, it is the highest-risk-if-skipped step, and finding
 real bugs in AWS's own samples would be the single most persuasive thing that

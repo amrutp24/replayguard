@@ -27,14 +27,34 @@ from ..ir import (
 #: Decorator marking a durable handler.
 _DURABLE_DECORATORS = {"durable_execution", "durable"}
 
-#: Context methods that open a durable operation. The first callable argument
-#: to these runs in STEP_BODY; everything else stays in DURABLE.
-_STEP_METHODS = {"step", "wait_for_callback", "invoke", "parallel"}
+#: Every durable operation across the three SDKs, in both spellings. Derived
+#: from the real SDK surface, not guessed -- an unrecognised operation is worse
+#: than a missing rule, because its body then gets analysed in the wrong region
+#: and every legitimate in-step call is reported as a violation.
+_STEP_METHODS = {
+    "step", "stepAsync", "step_async",
+    "map", "mapAsync", "map_async",
+    "wait", "waitAsync", "wait_async",
+    "parallel",
+    "invoke", "invokeAsync", "invoke_async",
+    "runInChildContext", "runInChildContextAsync",
+    "run_in_child_context", "run_in_child_context_async",
+    "waitForCallback", "wait_for_callback",
+    "createCallback", "create_callback",
+    "withRetry", "withRetryAsync", "with_retry", "with_retry_async",
+    "waitForCondition", "wait_for_condition",
+}
 
-#: Receiver names conventionally used for the durable context. Restricting to
-#: these keeps `foo.step()` on an unrelated object from being read as a durable
-#: operation.
-_CONTEXT_NAMES = {"context", "ctx", "durable_context", "dc"}
+def _is_context_name(name: str) -> bool:
+    """Is this identifier a durable context?
+
+    A fixed list of four names missed `childContext` from
+    `runInChildContext(async (childContext) => ...)`, so the child's steps were
+    not recognised and their bodies were analysed in the durable region. Child
+    and step contexts are named freely, so match on shape instead.
+    """
+    lowered = name.lower()
+    return "ctx" in lowered or "context" in lowered
 
 #: Methods that mutate their receiver in place. A step body calling one of these
 #: on a name from an enclosing scope is the silent-loss bug (RG003).
@@ -351,7 +371,7 @@ class _Walker:
         func = node.func
         if not isinstance(func, ast.Attribute) or func.attr not in _STEP_METHODS:
             return False
-        if not (isinstance(func.value, ast.Name) and func.value.id in _CONTEXT_NAMES):
+        if not (isinstance(func.value, ast.Name) and _is_context_name(func.value.id)):
             return False
 
         name_literal, name_is_static, name_symbols = self._step_name(node)
@@ -365,30 +385,56 @@ class _Walker:
             )
         )
 
-        # Keyword arguments and non-callable positionals are evaluated in the
-        # *durable* region, not inside the step — a common source of confusion.
-        for kw in node.keywords:
-            self.visit(kw.value, region)
-        for extra in node.args[1:]:
-            self.visit(extra, region)
+        # The body is found by KIND, not by position. `wait_for_callback` takes
+        # its submitter as a keyword (`submitter=fn`) in AWS's own samples, and
+        # assuming args[0] silently analysed those bodies in the durable region,
+        # reporting every legitimate in-step call as a violation.
+        candidates = [*node.args, *(kw.value for kw in node.keywords if kw.arg != "name")]
+        body = next((a for a in candidates if self._is_callable_arg(a)), None)
 
-        callable_arg = node.args[0] if node.args else None
-        if callable_arg is None:
+        # Everything that is not the body evaluates in the durable region.
+        for arg in candidates:
+            if arg is not body:
+                self.visit(arg, region)
+
+        if body is None:
+            # Something that looks like a callable passed by reference but could
+            # not be resolved -- an import, a method, a name from an outer
+            # module. Reported as RG900 so a clean run still means something.
+            for arg in candidates:
+                if not self._looks_like_unresolved_callable(arg):
+                    continue
+                self.h.unresolved.append(_loc(self.path, arg))
+                break
             return True
-
-        if isinstance(callable_arg, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
-            self.walk_function(callable_arg, Region.STEP_BODY)
-        elif (
-            isinstance(callable_arg, ast.Name)
-            and callable_arg.id in self.nested_defs
-        ):
-            # Passed by reference to a `def` in this handler — the common shape.
-            self.walk_function(self.nested_defs[callable_arg.id], Region.STEP_BODY)
+        if isinstance(body, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+            self.walk_function(body, Region.STEP_BODY)
         else:
-            # Imported, a method, or otherwise out of reach. Reported as RG900
-            # rather than skipped, so coverage stays honest.
-            self.h.unresolved.append(_loc(self.path, callable_arg))
+            self.walk_function(self.nested_defs[body.id], Region.STEP_BODY)
         return True
+
+    def _looks_like_unresolved_callable(self, node: ast.AST) -> bool:
+        """Distinguish a by-reference function from an ordinary data argument.
+
+        Many durable operations legitimately take no callable at all --
+        `context.wait(duration)`, `context.invoke(name, payload)`. Treating
+        every unresolved argument as a coverage gap produced far more notes
+        than real findings and made the count meaningless.
+
+        A callable passed by reference is a module-level function or an import,
+        so it is *not* bound as a local. A name that is bound locally is data.
+        """
+        if isinstance(node, ast.Attribute):
+            return True  # a method reference such as `self.handler`
+        if not isinstance(node, ast.Name) or node.id in self.nested_defs:
+            return False
+        return not any(node.id in scope for scope in self.scopes)
+
+    def _is_callable_arg(self, node: ast.AST) -> bool:
+        """A lambda, an inline def, or a name bound to a nested def."""
+        if isinstance(node, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        return isinstance(node, ast.Name) and node.id in self.nested_defs
 
     def _step_name(self, node: ast.Call) -> tuple[str | None, bool, list[str]]:
         for kw in node.keywords:
@@ -424,10 +470,11 @@ def _collect_nested(handler_node: ast.AST) -> tuple[dict[str, ast.AST], set[str]
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr in _STEP_METHODS):
             continue
-        if not (isinstance(f.value, ast.Name) and f.value.id in _CONTEXT_NAMES):
+        if not (isinstance(f.value, ast.Name) and _is_context_name(f.value.id)):
             continue
-        if node.args and isinstance(node.args[0], ast.Name):
-            step_bodies.add(node.args[0].id)
+        for arg in [*node.args, *(kw.value for kw in node.keywords if kw.arg != "name")]:
+            if isinstance(arg, ast.Name) and arg.id in nested:
+                step_bodies.add(arg.id)
     return nested, step_bodies
 
 

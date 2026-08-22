@@ -173,7 +173,12 @@ _JAVA: dict[str, Category] = {
     "FileReader": Category.FILESYSTEM,
     "FileWriter": Category.FILESYSTEM,
     # process
-    "Thread.currentThread": Category.PROCESS,
+    #
+    # `Thread.currentThread` is deliberately absent. The overwhelmingly common
+    # use is `Thread.currentThread().interrupt()` to restore an interrupt flag,
+    # and `.getName()` in a log line -- neither produces nondeterministic data
+    # that feeds computation. It fired on AWS's own conformance tests doing
+    # exactly the standard idiom, which is noise, not a finding.
     "ProcessHandle.current": Category.PROCESS,
 }
 

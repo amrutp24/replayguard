@@ -40,18 +40,34 @@ from ..ir import (
 _DURABLE_BASE = "DurableHandler"
 _CONTEXT_TYPE = "DurableContext"
 
+#: Every durable operation across the three SDKs, in both spellings. Derived
+#: from the real SDK surface, not guessed -- an unrecognised operation is worse
+#: than a missing rule, because its body then gets analysed in the wrong region
+#: and every legitimate in-step call is reported as a violation.
 _STEP_METHODS = {
-    "step",
-    "waitForCallback",
-    "createCallback",
-    "invoke",
+    "step", "stepAsync", "step_async",
+    "map", "mapAsync", "map_async",
+    "wait", "waitAsync", "wait_async",
     "parallel",
-    "map",
-    "runInChildContext",
-    "waitForCondition",
+    "invoke", "invokeAsync", "invoke_async",
+    "runInChildContext", "runInChildContextAsync",
+    "run_in_child_context", "run_in_child_context_async",
+    "waitForCallback", "wait_for_callback",
+    "createCallback", "create_callback",
+    "withRetry", "withRetryAsync", "with_retry", "with_retry_async",
+    "waitForCondition", "wait_for_condition",
 }
 
-_CONTEXT_NAMES = {"ctx", "context", "durableContext", "dc"}
+def _is_context_name(name: str) -> bool:
+    """Is this identifier a durable context?
+
+    A fixed list of four names missed `childContext` from
+    `runInChildContext(async (childContext) => ...)`, so the child's steps were
+    not recognised and their bodies were analysed in the durable region. Child
+    and step contexts are named freely, so match on shape instead.
+    """
+    lowered = name.lower()
+    return "ctx" in lowered or "context" in lowered
 
 #: In-place mutators on the common collection types.
 _MUTATORS = {
@@ -449,7 +465,7 @@ class _Walker:
             return False
         if self.src.text(name_node) not in _STEP_METHODS:
             return False
-        if obj.type != "identifier" or self.src.text(obj) not in _CONTEXT_NAMES:
+        if obj.type != "identifier" or not _is_context_name(self.src.text(obj)):
             return False
 
         args = node.child_by_field_name("arguments")
@@ -480,8 +496,9 @@ class _Walker:
             self.visit(arg, region)
 
         if body_node is None:
-            if positional:
-                self.h.unresolved.append(self.src.loc(node))
+            # Plenty of durable operations take no callable at all -- `wait`,
+            # `createCallback`. Reporting those as coverage gaps buried the real
+            # findings, so absence of a lambda is not by itself a gap.
             return True
         if body_node.type == "method_reference":
             # `this::doWork` -- resolving it needs interprocedural analysis.
