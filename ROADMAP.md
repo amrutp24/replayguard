@@ -1,0 +1,178 @@
+# Roadmap
+
+## The goal
+
+> **Be the determinism check teams run in CI before their first long-running
+> durable execution comes due.**
+
+Durable functions went GA in early 2026 and can suspend for up to 366 days. The
+first workflows started in 2026 come due through 2027. Determinism violations are
+silent until resume — so the bugs being written right now are invisible right
+now, and land later, in production, on workflows holding real state.
+
+There is a window to be the tool that exists before that happens. That window is
+the whole opportunity.
+
+**Success looks like:** a team building on durable functions installs this
+without being told to, because it is the obvious thing to install.
+
+**Failure looks like:** technically correct, nobody uses it. Or worse — someone
+installs it, it fires on their working code, and they uninstall it and tell
+others not to bother.
+
+> This goal statement is a proposal. If the real aim is different — a portfolio
+> piece, a conference talk, a stepping stone to the Rust SDK — the sequencing
+> below changes and should be rewritten first.
+
+## Why this is winnable
+
+- **AWS ships nothing.** Their docs state determinism as a developer obligation
+  with no verification tooling.
+- **The category is proven.** Temporal shipped `workflowcheck` for exactly this
+  problem. The need is not speculative.
+- **Verified absent for AWS.** GitHub repo search on four term combinations,
+  code search, and PyPI all returned nothing (2026-08-17).
+- **The nearest neighbour cannot pivot cheaply.** `durable-viz` parses
+  Python/Java/C# with regex — adequate for drawing flowcharts, structurally
+  incapable of scope resolution and dataflow.
+
+## Where we are — M0 complete
+
+Static checker across all three runtimes with an official AWS SDK. Shared IR, 6
+rules, CLI with text/JSON/SARIF, 38 tests, validated against one real handler.
+
+Runtime coverage is *finished*, not partial: Rust has no SDK, Go and .NET have
+only community proofs of concept.
+
+---
+
+## M1 — Earn trust on real code
+
+**The gate before anything is published.** A linter gets exactly one first
+impression. One false positive on someone's working handler and it is uninstalled
+permanently.
+
+| Task | Why |
+|---|---|
+| Interprocedural analysis, intra-file | Largest known blind spot. A handler calling a private helper that does the I/O currently passes clean. Found when the checker missed a `Files.readString` in my own fixture. |
+| Run against every public durable-functions repo | `aws-samples/sample-lambda-durable-functions`, `aws-samples/sample-ai-workflows-in-aws-lambda-durable-functions`, `singledigit/durable-function-video-scanner`, `singledigit/durable-serverlesspresso`, `lukehedger/lambda-durable-functions-examples`, `awedis/aws-lambda-durable-functions-callback`, plus the three official SDK repos' examples. |
+| Triage every finding | Each is either a real bug (write it up — free credibility) or a false positive (fix it). |
+| Cross-frontend diffing | Running equivalent fixtures through two frontends already caught one real inconsistency. Automate it. |
+
+**Definition of done:** zero *unexplained* findings across every public repo
+above. Every remaining finding is either a defensible real bug or a documented,
+justified limitation.
+
+**Why first:** it is cheap, it is the highest-risk-if-skipped step, and finding
+real bugs in AWS's own samples would be the single most persuasive thing that
+could happen to this project.
+
+---
+
+## M2 — Ship it
+
+Distribution is not an afterthought. A correct tool nobody installs has failed.
+
+| Task | Notes |
+|---|---|
+| PyPI release | `pip install replayguard` |
+| GitHub repo, public | Name/visibility is the owner's call |
+| GitHub Action | Three lines in a workflow. SARIF already emitted, so findings render inline on the PR that introduced them — which is the whole point for a bug class nobody notices for months. |
+| `pre-commit` hook | Catches it before the PR exists |
+| README quickstart | Already largely written |
+
+**Definition of done:** on a clean machine, `pip install replayguard` then
+`replayguard check .` works; a GitHub Action annotates a PR with a real finding.
+
+**Sequencing note:** M2 depends on M1. Publishing first and fixing later is the
+one ordering that can permanently lose.
+
+---
+
+## M3 — The differentiator: dynamic replay-divergence
+
+Without this, replayguard is a competent `workflowcheck` analogue for a different
+platform. With it, it is a category nobody occupies.
+
+Static analysis structurally cannot see: nondeterminism inside a third-party
+library, data tainted several hops back, iteration order over unordered
+collections, concurrent completion order, or the platform changing underneath a
+suspended execution.
+
+Dynamic checking sees all of it, because it does not need to predict the cause.
+
+| Task | Notes |
+|---|---|
+| **Check `aws/aws-durable-execution-conformance-tests` first** | Almost certainly validates *SDK protocol* conformance, not *user workflow* determinism — but this was never confirmed, and it decides whether this milestone is novel. |
+| Journal capture | AWS's testing SDK exposes execution status, operation results, ordering, and counts. |
+| Forced replay + diff | Run, replay, compare journals. Any difference is a determinism bug. |
+| Perturbed replay | Replay under a different wall clock, different machine, swapped SDK version. This is the fault-injection half, and it answers the owner's own Rule 4 question — whether pinning the SDK is actually sufficient. |
+
+**Definition of done:** the harness detects a deliberately injected divergence
+that the static checker provably cannot catch. That single demo is the proof the
+whole milestone exists for.
+
+---
+
+## M4 — The finding nobody has published
+
+Turn the tooling into knowledge. **What actually happens when replay determinism
+is violated?** Clean failure? Silent re-execution of a side effect? A stuck
+execution? A checkpoint result delivered to the wrong operation?
+
+AWS's docs imply consequences (they name double-charging) but nothing documents
+observed behaviour. M3's harness is exactly the instrument for measuring it.
+
+**Definition of done:** a written, dated, reproducible account of each observed
+failure mode — which also feeds back into rule severity, since severity is
+currently reasoned rather than measured.
+
+This is the part that is genuinely research rather than engineering, and it is
+what a talk or a post would be built on.
+
+---
+
+## M5 — Conditional: the Rust SDK
+
+**Gated entirely on one experiment.** `experiments/durable_runtime_probe.py` is
+written and ready; it needs AWS credentials and has never been run.
+
+- **Accepted** → a Rust durable SDK is buildable, and the strongest idea from
+  this whole line of work opens up: an SDK where nondeterminism is a **compile
+  error** rather than a lint. Ownership of the durable context, borrow-checker
+  enforcement of step boundaries. No durable SDK in any ecosystem does this, and
+  Python and JS structurally cannot — which is precisely why they need
+  replayguard.
+- **Rejected** → blocked on AWS, not on effort. Revisit if AWS opens the gate.
+
+Ten minutes to settle. Worth running early even though the milestone is last,
+because a positive result may reorder everything after M2.
+
+---
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| AWS ships their own checker | Move on M1/M2. The dynamic half (M3) is much harder to replicate and is where the durable advantage is. |
+| `durable-viz` adds validation | They would need to replace three regex parsers with real ASTs. Also genuinely complementary — coordination is more sensible than competition. |
+| Durable functions adoption is slow | The tool has no users regardless of quality. Partly hedged by M4, which has value as knowledge even with few users. |
+| False positives on first contact | This is what M1 exists for, and why it precedes M2. |
+
+## Decisions needed
+
+1. **Is the goal statement right?** Everything below it is sequenced from it.
+2. **Public repo, and under what name?** Gates M2.
+3. **PyPI under your name?** A published package is a standing maintenance
+   commitment.
+4. **Can credentials be put in front of the probe?** Cheap, and may reorder the
+   back half.
+
+## Sequencing summary
+
+```
+M1 trust  ──▶  M2 ship  ──▶  M3 dynamic  ──▶  M4 findings
+   (gate)                          ▲
+                                   │
+M5 Rust SDK ◀── probe ─────────────┘  (run the probe early; it may reorder)
+```
