@@ -69,6 +69,38 @@ see below.
 
 ---
 
+## Dynamic replay-divergence — independent corroboration
+
+The static conclusion above was reached by inspecting code. The dynamic harness
+tests the same question by *running* it, and agrees.
+
+**Method.** Run a handler twice: once as a control, once in a world where the
+clock has moved 13 hours, entropy is reseeded, and identity generators return
+different values. Diff the operation journals -- kinds, names, order, nesting.
+A handler that is a pure function of its inputs and checkpointed results is
+unaffected. One that is not changes shape, and the change is the evidence.
+
+**Result: 51 AWS conformance handlers executed twice each. Zero divergences.**
+Five more suspend on a callback the local runner never delivers and cannot be
+checked this way; one had no handler symbol.
+
+That is corroboration in both directions:
+
+* AWS's handlers really are deterministic, so RG002/RG004/RG005 having nothing
+  to report was correct, not a detection failure.
+* The harness produced **no false alarms on 51 correct handlers**, which is the
+  property that decides whether anyone leaves it switched on.
+
+**What it catches that no static rule can.** A handler whose operation order is
+driven by `random.sample` diverges under perturbation. There is no catalog entry
+for that and none could reasonably be written -- the harness measures the
+effect, not the cause.
+
+**What it cannot do.** Prove determinism. A handler that survives this
+perturbation may diverge under another, and the report says so rather than
+claiming a clean bill of health. It also cannot check handlers that suspend
+waiting for a callback.
+
 ## Why RG002, RG004 and RG005 never fire
 
 A dedicated hunt, because three silent rules could mean either "the code is

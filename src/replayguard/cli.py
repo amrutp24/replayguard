@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Iterable
@@ -140,6 +141,43 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return 1 if any(f.severity.rank >= threshold for f in all_findings) else 0
 
 
+def _cmd_replay(args: argparse.Namespace) -> int:
+    """Run a handler twice under different worlds and diff the journals.
+
+    This is the half static analysis cannot do: it needs no rule for the source
+    of nondeterminism, only evidence that the execution shape moved.
+    """
+    from .dynamic import check_handler
+
+    module_name, _, attr = args.target.partition(":")
+    if not attr:
+        print(
+            "replayguard: target must be module:handler, e.g. app.orders:handler",
+            file=sys.stderr,
+        )
+        return 2
+
+    sys.path.insert(0, os.getcwd())
+    try:
+        module = __import__(module_name, fromlist=[attr])
+        handler = getattr(module, attr)
+    except (ImportError, AttributeError) as exc:
+        print(f"replayguard: could not import {args.target}: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        event = json.loads(args.event)
+    except json.JSONDecodeError as exc:
+        print(f"replayguard: --event is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+
+    report = check_handler(handler, event, timeout=args.timeout)
+    print(report.render())
+    if report.harness_error:
+        return 2
+    return 1 if report.diverged else 0
+
+
 def _cmd_rules(args: argparse.Namespace) -> int:
     import inspect
 
@@ -184,6 +222,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     check.add_argument("--root", default=os.getcwd(), help="base for relative paths")
     check.set_defaults(func=_cmd_check)
+
+    replay = sub.add_parser(
+        "replay",
+        help="run a handler twice under different worlds and diff the journals",
+    )
+    replay.add_argument("target", help="module:handler, e.g. app.orders:handler")
+    replay.add_argument("--event", default="{}", help="event payload as JSON")
+    replay.add_argument(
+        "--timeout",
+        type=float,
+        default=20.0,
+        help="seconds before a run is treated as suspended (default: 20)",
+    )
+    replay.set_defaults(func=_cmd_replay)
 
     rules_cmd = sub.add_parser("rules", help="list the rules")
     rules_cmd.add_argument("--explain", action="store_true")

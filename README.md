@@ -176,10 +176,42 @@ tainted several hops back, iteration order over an unordered collection, or
 concurrent completion order. It can't tell you what happens when the platform
 changes underneath a suspended execution either.
 
-Those need **dynamic replay-divergence checking**: run the workflow, force a
-replay, and diff the operation journals. Any difference is a determinism bug
-regardless of cause. That's the planned second half of this tool, and nothing
-like it exists today.
+## Dynamic replay-divergence
+
+Static analysis reasons about what code *might* do. The dynamic half runs the
+handler twice -- once normally, once in a world where the clock has moved and
+entropy is reseeded -- and diffs the operation journals:
+
+```bash
+replayguard replay app.orders:handler --event '{"orderId": "A1"}'
+```
+
+```
+replay-divergence: 1 divergence(s) found.
+
+  operation 0: operation name changed -- checkpoints match by name
+    control   : step(op-1787442395)
+    perturbed : step(op-1787489626)
+```
+
+Or as an assertion next to the handler, so a determinism regression fails the
+build rather than surfacing on a resume months later:
+
+```python
+from replayguard.dynamic import assert_deterministic
+
+def test_handler_is_deterministic():
+    assert_deterministic(handler, {"orderId": "A1"})
+```
+
+It needs no rule for the *source* of nondeterminism -- a clock inside a library,
+an iteration order, a value tainted many hops back. It measures the effect. On
+51 AWS conformance handlers it produced zero false alarms; on a handler whose
+step order comes from `random.sample` -- which no static rule covers -- it
+diverges.
+
+It cannot prove determinism, only fail to disprove it, and the report says so.
+Handlers that suspend on a callback can't be checked locally.
 
 ## Prior art
 
