@@ -286,3 +286,80 @@ def test_unguarded_global_write_from_a_step_is_still_reported():
     hits = [f for f in findings if f.rule == "RG003"]
     assert hits, findings
     assert "TOTAL" in hits[0].message
+
+
+# -- 10. A stored closure runs at an unknown time ---------------------------
+
+
+def test_closure_stored_then_invoked_in_a_step_is_not_durable_region():
+    """The saga-compensation shape, from DurableLambdaCourse.
+
+    The closure is *defined* at handler top level and pushed into an array, then
+    *executed* from inside a step much later. Taking the definition site as the
+    execution context reported every nondeterministic call it reaches -- five
+    false positives in one file.
+    """
+    findings = ts_findings(
+        "  const comps: any[] = [];\n"
+        "  comps.push({ name: 'undo', fn: async () => { return Math.random(); } });\n"
+        "  for (const c of comps) {\n"
+        "    await context.step(c.name, async () => c.fn());\n"
+        "  }",
+    )
+    assert not [f for f in findings if f.rule in {"RG001", "RG004"}], findings
+
+
+def test_closure_invoked_at_its_definition_site_is_still_checked():
+    """The fix must not blind the checker to callbacks that do run immediately."""
+    findings = ts_findings(
+        "  const ids = [1, 2].map(() => Math.random());\n  return ids;",
+    )
+    assert [f for f in findings if f.rule == "RG001"], findings
+
+
+# -- 11. Increment is a mutation --------------------------------------------
+
+
+def test_increment_in_a_step_body_is_an_outer_write():
+    """`n++` is an update_expression, not an assignment_expression.
+
+    Handling only assignments missed a counter incremented inside a step body and
+    read back outside it into the handler's return value -- a genuine RG003 in
+    the same file that produced four false positives.
+    """
+    findings = ts_findings(
+        "  let attempts = 0;\n"
+        "  await context.step('retry', async () => { attempts++; });\n"
+        "  return { attempts };",
+    )
+    hits = [f for f in findings if f.rule == "RG003"]
+    assert hits, findings
+    assert "attempts" in hits[0].message
+
+
+# -- 12. Unnamed operation overloads ----------------------------------------
+
+
+def test_parallel_with_an_array_has_no_name():
+    """`context.parallel([...])` is the unnamed overload.
+
+    Argument 0 is an array of branch bodies, not a name. Binding it as the name
+    scanned every branch for clocks and reported a span covering the whole call
+    -- against a file whose author had named all 30 of its operations with string
+    literals precisely to avoid this hazard.
+    """
+    findings = ts_findings(
+        "  return await context.parallel([\n"
+        "    async () => ({ at: new Date().toISOString() }),\n"
+        "    async () => ({ at: new Date().toISOString() }),\n"
+        "  ]);",
+    )
+    assert not [f for f in findings if f.rule == "RG005"], findings
+
+
+def test_template_literal_name_is_still_checked():
+    """A computed name built from a clock must still be caught."""
+    findings = ts_findings(
+        "  await context.step(`op-${Date.now()}`, async () => 1);",
+    )
+    assert [f for f in findings if f.rule == "RG005"], findings

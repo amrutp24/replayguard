@@ -352,6 +352,29 @@ class _Walker:
         if left is not None:
             self.visit(left, region)
 
+    def _v_update_expression(self, node, region: Region) -> None:
+        """`n++` / `n--` mutate, and tree-sitter gives them their own node type.
+
+        Handling only assignment_expression missed the increment form, which is
+        how a counter bumped inside a step body and read back outside it escaped
+        detection in the TypeScript frontend.
+        """
+        target = next((c for c in node.children if c.is_named), None)
+        if region is Region.STEP_BODY and target is not None:
+            root = self.src.root_name(target)
+            if root and self._is_outer(root):
+                self.h.outer_writes.append(
+                    OuterWrite(
+                        target=root,
+                        loc=self.src.loc(node),
+                        region=region,
+                        is_global=self._is_field(root),
+                        via=self.via,
+                    )
+                )
+        for child in node.children:
+            self.visit(child, region)
+
     # -- control flow -----------------------------------------------------
 
     def _v_if_statement(self, node, region: Region) -> None:
@@ -630,6 +653,11 @@ class _Walker:
             return None, True, []
         if name_node.type == "string_literal":
             return self.src.text(name_node).strip('"'), True, []
+        # Overloads without a name pass a collection or a lambda first. Binding
+        # that as "the name" scans an entire branch body for clocks and reports a
+        # span covering the whole call -- see the TypeScript frontend.
+        if name_node.type not in ("binary_expression", "template_expression"):
+            return None, True, []
         symbols: list[str] = []
         for sub in [
             name_node,

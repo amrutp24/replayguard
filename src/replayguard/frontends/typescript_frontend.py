@@ -204,6 +204,25 @@ def _is_top_level_function(node) -> bool:
     return True
 
 
+#: Contexts in which a function is *stored* rather than invoked. A closure put
+#: into an object or an array runs wherever something later calls it, which is
+#: not knowable here.
+_STORED_PARENTS = {"pair", "array"}
+
+
+def _is_stored_closure(node) -> bool:
+    """True when a function is being saved into a data structure, not called.
+
+    The saga pattern does exactly this: compensation closures are pushed into an
+    array at handler top level and executed much later from inside a step. Taking
+    the definition site as the execution context reported every nondeterministic
+    call they reach -- five false positives in one file, while a structurally
+    identical helper called directly from inside a step was correctly silent.
+    """
+    parent = node.parent
+    return parent is not None and parent.type in _STORED_PARENTS
+
+
 def _descend(node, types: set[str]):
     """Yield descendants of the given types, without leaving nested functions."""
     for child in node.children:
@@ -377,6 +396,29 @@ class _Walker:
 
     _v_augmented_assignment_expression = _v_assignment_expression
 
+    def _v_update_expression(self, node, region: Region) -> None:
+        """`n++` and `n--` mutate, and tree-sitter gives them their own node.
+
+        Handling only assignment_expression missed the increment form entirely,
+        which hid a genuine RG003 -- a counter incremented in a step body and
+        read back outside it into the handler's return value.
+        """
+        target = next((c for c in node.children if c.is_named), None)
+        if region is Region.STEP_BODY and target is not None:
+            root = self.src.root_name(target, self.ctx.aliases)
+            if root and self._is_outer(root):
+                self.h.outer_writes.append(
+                    OuterWrite(
+                        target=root,
+                        loc=self.src.loc(node),
+                        region=region,
+                        is_global=self._is_module_level(root),
+                        via=self.via,
+                    )
+                )
+        for child in node.children:
+            self.visit(child, region)
+
     # -- control flow -----------------------------------------------------
 
     def _v_if_statement(self, node, region: Region) -> None:
@@ -395,6 +437,21 @@ class _Walker:
             self.visit(child, region)
 
     # -- calls ------------------------------------------------------------
+
+    def _v_arrow_function(self, node, region: Region) -> None:
+        """A stored closure runs at an unknown time, so it gets an unknown region.
+
+        Rules never fire on UNKNOWN, and the site is recorded as a coverage gap
+        instead -- the checker says "I could not tell" rather than guessing, which
+        is the whole point of RG900.
+        """
+        if region is not Region.UNKNOWN and _is_stored_closure(node):
+            self.h.unresolved.append(self.src.loc(node))
+            region = Region.UNKNOWN
+        for child in node.children:
+            self.visit(child, region)
+
+    _v_function_expression = _v_arrow_function
 
     def _v_call_expression(self, node, region: Region) -> None:
         if self._try_durable_operation(node, region):
@@ -592,11 +649,22 @@ class _Walker:
         # once in the wrong region, which reported every in-step call as a
         # durable-region violation.
         for arg in positional:
-            if arg is body_node:
+            if arg is body_node or arg.type == "array":
                 continue
             if arg is name_node and arg.type == "string":
                 continue
             self.visit(arg, region)
+
+        # `parallel([fnA, fnB])` and `map(items, fn)` pass their branch bodies in
+        # an array. Those elements execute *as* the durable operation, so they
+        # are step bodies -- not stored closures of unknown timing, which is what
+        # the stored-closure guard would otherwise make them.
+        for arg in positional:
+            if arg.type != "array":
+                continue
+            for element in arg.children:
+                if element.is_named and element.type in _FUNCTION_NODES:
+                    self.walk_function(element, Region.STEP_BODY)
 
         if body_node is None:
             # An identifier that is not a known declaration and not a local is
@@ -621,10 +689,21 @@ class _Walker:
         return True
 
     def _step_name(self, name_node) -> tuple[str | None, bool, list[str]]:
+        """Resolve the operation name, if this overload has one at all.
+
+        `parallel(branches)` and `map(items, fn)` take no name -- argument 0 is
+        an array, not a string. Treating it as a name bound the whole array of
+        branch bodies and scanned them for clocks, so RG005 reported a span
+        covering 200 lines of a file whose author had in fact named every one of
+        its 30 operations with a string literal. Only a string or a template
+        literal is a name; anything else means the call is unnamed.
+        """
         if name_node is None:
             return None, True, []
         if name_node.type == "string":
             return self.src.text(name_node).strip("\"'"), True, []
+        if name_node.type != "template_string":
+            return None, True, []
         symbols: list[str] = []
         for sub in [name_node, *_descend(name_node, {"call_expression", "member_expression", "new_expression"})]:
             d = self.src.dotted(sub, self.ctx.aliases)
