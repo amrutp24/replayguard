@@ -207,3 +207,82 @@ def test_unnamed_operation_body_is_visited_once():
     sends = [c for c in handler.calls if c.dotted == "ddb.send"]
     assert len(sends) == 1, f"body visited {len(sends)} times"
     assert not rules.check(handler)
+
+
+# -- 8. Deferred step bodies (@durable_step) --------------------------------
+
+
+def test_durable_step_decorated_helper_runs_inside_a_step():
+    """`@durable_step` makes calling the function return a step descriptor.
+
+    `context.step(validate(event), name="v")` therefore runs the body inside the
+    step, not at the call site. Following it as an ordinary durable-region call
+    reported every clock and SDK call in the body -- five false positives
+    against AWS's own FSI payment sample.
+    """
+    findings = py_findings(
+        "    return context.step(validate(event), name='validate')",
+        extra=(
+            "import datetime\n"
+            "from aws_durable_execution_sdk_python import durable_step\n"
+            "@durable_step\n"
+            "def validate(step_context, event):\n"
+            "    return datetime.datetime.now().isoformat()"
+        ),
+    )
+    assert not [f for f in findings if f.rule in {"RG001", "RG002"}], findings
+
+
+def test_undecorated_helper_is_still_followed():
+    """The @durable_step handling must not disable interprocedural analysis."""
+    findings = py_findings(
+        "    return validate(event)",
+        extra=(
+            "import datetime\n"
+            "def validate(event):\n"
+            "    return datetime.datetime.now().isoformat()"
+        ),
+    )
+    assert [f for f in findings if f.rule == "RG001"], findings
+
+
+# -- 9. Lazy client initialisation is not a lost update ---------------------
+
+
+def test_lazy_initialised_client_is_not_reported():
+    """The memoised-singleton idiom, found in AWS's own AI workflow sample.
+
+    Losing this write on replay costs a re-initialisation, not correctness: the
+    next call rebuilds it. RG003's premise -- that the value is silently wrong
+    -- does not hold, and firing here would hit almost every real handler.
+    """
+    findings = py_findings(
+        "    return context.step(lambda _: get_client(), name='call')",
+        extra=(
+            "import boto3\n"
+            "_client = None\n"
+            "def get_client():\n"
+            "    global _client\n"
+            "    if _client is None:\n"
+            "        _client = boto3.client('bedrock-runtime')\n"
+            "    return _client"
+        ),
+    )
+    assert not [f for f in findings if f.rule == "RG003"], findings
+
+
+def test_unguarded_global_write_from_a_step_is_still_reported():
+    """The guard must not silence a genuine lost update."""
+    findings = py_findings(
+        "    return context.step(lambda _: record(), name='rec')",
+        extra=(
+            "TOTAL = 0\n"
+            "def record():\n"
+            "    global TOTAL\n"
+            "    TOTAL = TOTAL + 1\n"
+            "    return TOTAL"
+        ),
+    )
+    hits = [f for f in findings if f.rule == "RG003"]
+    assert hits, findings
+    assert "TOTAL" in hits[0].message

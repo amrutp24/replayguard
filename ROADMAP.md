@@ -102,8 +102,40 @@ changes on every replay.
 All are literal violations of AWS's documented rule. Most flow only into a
 returned payload, so consequences are limited; the task-id case is not.
 
-**Still open before M2:** interprocedural analysis. 24 coverage notes remain,
-concentrated on `map` handlers whose bodies are module-level functions.
+### Interprocedural analysis — done 2026-08-19
+
+Calls are now followed into functions defined in the same file, in all three
+languages. The region travels with the call, not the definition: a helper is a
+violation when the durable region calls it and correct when a step body does.
+Findings name their route ("Reached from the handler through `readConfig()`").
+
+Built by three parallel agents, one per frontend, against a fixed IR contract.
+All three independently reported that the depth cap truncated *silently* --
+which contradicts the honest-coverage stance RG900 exists for. It now records a
+coverage gap at the cutoff.
+
+**The re-run against AWS's repos was the real test, and it introduced five new
+false positives** that the unit tests could not have caught:
+
+- **`@durable_step` bodies are deferred.** The decorator makes calling the
+  function return a step descriptor, so `context.step(validate(event), ...)`
+  runs the body *inside* the step. Following it as an ordinary durable-region
+  call reported every clock and SDK call in the body — four findings against the
+  FSI payment sample and the Python conformance tests.
+- **Lazy client initialisation is not a lost update.** The memoised singleton
+  (`if _client is None: _client = boto3.client(...)`) tripped RG003, but losing
+  that write on replay costs a re-initialisation, not correctness. Firing on it
+  would hit almost every real handler.
+
+Both are fixed and pinned. **Net result: 34 findings -> 35, real findings
+10 -> 11.** Interprocedural analysis found exactly one genuine new violation
+(`buildPaymentResult()` reaching `new Date()` in the retail sample) and, once
+corrected, added no noise.
+
+**Known limits, consistent across the three frontends:** only bare-name calls
+resolve — `self.helper()`, `obj.helper()`, and calls through a field are not
+followed; cross-file calls are out of scope; a helper reached from two call
+sites is walked once, so the reported route is the first one found.
 
 **Why first:** it is cheap, it is the highest-risk-if-skipped step, and finding
 real bugs in AWS's own samples would be the single most persuasive thing that

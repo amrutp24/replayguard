@@ -27,6 +27,14 @@ from ..ir import (
 #: Decorator marking a durable handler.
 _DURABLE_DECORATORS = {"durable_execution", "durable"}
 
+#: Decorator marking a *deferred step*. `@durable_step` makes calling the
+#: function return a step descriptor rather than run its body, so
+#: `context.step(validate(event), name="v")` executes that body inside the step.
+#: Following such a call as an ordinary durable-region call reported every clock
+#: and every SDK call in the body as a violation -- five false positives against
+#: AWS's own payment sample before this was handled.
+_STEP_DECORATORS = {"durable_step", "step"}
+
 #: Every durable operation across the three SDKs, in both spellings. Derived
 #: from the real SDK surface, not guessed -- an unrecognised operation is worse
 #: than a missing rule, because its body then gets analysed in the wrong region
@@ -77,6 +85,12 @@ _MUTATORS = {
 #: Roots that indicate a value came from an AWS SDK construction.
 _AWS_ROOTS = ("boto3", "botocore")
 
+#: How many helper calls deep the walk follows. Handlers in the wild delegate
+#: one or two levels; past that the chain is usually framework plumbing, and a
+#: `via` path that long stops being something a reader can act on. A cap also
+#: bounds the work on a densely connected call graph.
+_MAX_CALL_DEPTH = 5
+
 
 def _loc(path: str, node: ast.AST) -> Location:
     return Location(
@@ -100,6 +114,23 @@ def _dotted(node: ast.AST, aliases: dict[str, str]) -> str | None:
     return None
 
 
+def _lazy_init_targets(test: ast.AST) -> set[str]:
+    """Names a condition tests for emptiness, i.e. `x is None` / `not x`."""
+    names: set[str] = set()
+    if isinstance(test, ast.Compare) and isinstance(test.left, ast.Name):
+        for op, comp in zip(test.ops, test.comparators, strict=False):
+            is_none = isinstance(comp, ast.Constant) and comp.value is None
+            if is_none and isinstance(op, (ast.Is, ast.Eq)):
+                names.add(test.left.id)
+    elif isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        if isinstance(test.operand, ast.Name):
+            names.add(test.operand.id)
+    elif isinstance(test, ast.BoolOp):
+        for value in test.values:
+            names |= _lazy_init_targets(value)
+    return names
+
+
 def _root_name(node: ast.AST) -> str | None:
     """The leftmost Name in an attribute/subscript/call chain."""
     while isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
@@ -117,6 +148,14 @@ class _ModuleContext:
         #: I/O. Method names on these are unbounded (`put_item`, `invoke_model`,
         #: …) so they cannot be catalogued individually.
         self.aws_names: set[str] = set()
+        #: Module-level `def`s, so a call from a handler can be followed into
+        #: the body that actually does the work. Keyed by name because that is
+        #: all a call site gives us.
+        self.functions: dict[str, ast.AST] = {
+            n.name: n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -159,6 +198,7 @@ class _Walker:
         handler: Handler,
         nested_defs: dict[str, ast.AST],
         step_body_names: set[str],
+        handler_node: ast.AST | None = None,
     ):
         self.path = path
         self.ctx = ctx
@@ -170,6 +210,27 @@ class _Walker:
         self.step_body_names = step_body_names
         #: Innermost-last stack of names bound in each enclosing function scope.
         self.scopes: list[set[str]] = []
+        #: Names declared `global`/`nonlocal` per scope, so the write is reported
+        #: where the assignment is rather than at the declaration -- which is
+        #: what makes the lazy-init guard below visible at all.
+        self.declared_global: list[set[str]] = []
+        #: Names inside an `if X is None:` guard. A write there is idempotent
+        #: lazy initialisation, not a lost update.
+        self.lazy_guards: list[set[str]] = []
+        #: Helper names currently being walked through, outermost first. Copied
+        #: onto every node recorded while it is non-empty, so a finding buried
+        #: two `def`s away still tells the reader how the handler reaches it.
+        self.via: list[str] = []
+        #: (function, region) pairs already entered. Keyed by region because the
+        #: same helper called from both sides of the boundary has to be judged
+        #: twice, and deduplicated at all because mutual recursion would
+        #: otherwise loop forever rather than fail.
+        self.walked: set[tuple[int, Region]] = set()
+        if handler_node is not None:
+            # The handler is itself a module-level function, so a recursive call
+            # would re-walk the whole body under a bogus `via` path.
+            self.walked.add((id(handler_node), Region.DURABLE))
+        self.depth = 0
 
     # -- scope helpers ----------------------------------------------------
 
@@ -199,6 +260,7 @@ class _Walker:
 
     def walk_function(self, fn: ast.AST, region: Region) -> None:
         self.scopes.append(set())
+        self.declared_global.append(set())
         args = getattr(fn, "args", None)
         if args is not None:
             for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
@@ -212,6 +274,7 @@ class _Walker:
         for stmt in body:
             self.visit(stmt, region)
         self.scopes.pop()
+        self.declared_global.pop()
 
     # -- dispatch ---------------------------------------------------------
 
@@ -238,23 +301,26 @@ class _Walker:
         self.visit(node.value, region)
 
     def _v_Global(self, node: ast.Global, region: Region) -> None:
-        for name in node.names:
-            if region is Region.STEP_BODY:
-                self.h.outer_writes.append(
-                    OuterWrite(
-                        target=name,
-                        loc=_loc(self.path, node),
-                        region=region,
-                        is_global=True,
-                    )
-                )
+        """Record the declaration; the write is reported where it happens.
+
+        Reporting at the `global` line pointed at a statement that writes
+        nothing, and hid whether the assignment sat inside a lazy-init guard.
+        """
+        if self.declared_global:
+            self.declared_global[-1].update(node.names)
 
     _v_Nonlocal = _v_Global
 
     def _v_If(self, node: ast.If, region: Region) -> None:
         self._record_branch(node.test, region, node)
         self.visit(node.test, region)
-        for stmt in [*node.body, *node.orelse]:
+        # Only the `then` branch is guarded: `if x is None: x = make()` is the
+        # lazy-init shape; the `else` is ordinary code.
+        self.lazy_guards.append(_lazy_init_targets(node.test))
+        for stmt in node.body:
+            self.visit(stmt, region)
+        self.lazy_guards.pop()
+        for stmt in node.orelse:
             self.visit(stmt, region)
 
     def _v_While(self, node: ast.While, region: Region) -> None:
@@ -295,12 +361,76 @@ class _Walker:
                     loc=_loc(self.path, node),
                     region=region,
                     external_client=bool(root and root in self.ctx.aws_names),
+                    via=tuple(self.via),
                 )
             )
             self._record_mutating_call(node, region)
 
+        self._walk_callee(node.func, region)
+
         for child in ast.iter_child_nodes(node):
             self.visit(child, region)
+
+    def _walk_callee(self, func: ast.AST, region: Region) -> None:
+        """Follow a call into a function defined in the same file.
+
+        Stopping at the handler body misses the most common real shape there
+        is: the handler reads clean because every clock and every `open()`
+        lives one `def` away. The region travels with the call rather than with
+        the definition, because the same helper is a violation when the durable
+        region calls it and correct when a step body does.
+        """
+        if not isinstance(func, ast.Name):
+            return
+        if self.depth >= _MAX_CALL_DEPTH:
+            # Past the cap the chain is not analysed. Record it as a coverage
+            # gap rather than stopping quietly: a silently truncated walk
+            # implies a clean bill of health the checker has not earned, which
+            # is the one thing RG900 exists to prevent.
+            self.h.unresolved.append(_loc(self.path, func))
+            return
+        name = func.id
+
+        # A nested def used as a step body is already walked at its
+        # `context.step(...)` site with STEP_BODY region. Walking it again from
+        # a bare call would report its legitimate in-step I/O as a durable
+        # violation — the false positive this tool can least afford.
+        if name in self.step_body_names:
+            return
+
+        target = self.nested_defs.get(name)
+        is_nested = target is not None
+        if target is None:
+            target = self.ctx.functions.get(name)
+        if target is None:
+            return
+
+        key = (id(target), region)
+        if key in self.walked:
+            return
+        self.walked.add(key)
+
+        # Scope is the part that decides whether RG003 is right or noise. A
+        # module-level function is not a closure: the handler's locals are
+        # invisible to it, so leaving them on the stack would make a plain
+        # parameter read look like a captured-variable write. A nested def *is*
+        # a closure and keeps the stack it was written inside.
+        # A @durable_step body executes inside the step, whatever region the
+        # call site is in, so the region does not travel with the call here.
+        if _is_step_decorated(target, self.ctx.aliases):
+            region = Region.STEP_BODY
+
+        saved_scopes = self.scopes
+        if not is_nested:
+            self.scopes = []
+        self.via.append(name)
+        self.depth += 1
+        try:
+            self.walk_function(target, region)
+        finally:
+            self.depth -= 1
+            self.via.pop()
+            self.scopes = saved_scopes
 
     # -- recording --------------------------------------------------------
 
@@ -316,6 +446,29 @@ class _Walker:
         """
         if region is not Region.STEP_BODY:
             return
+
+        # A plain `x = ...` is local unless declared global/nonlocal.
+        if isinstance(target, ast.Name):
+            name = target.id
+            if not any(name in declared for declared in self.declared_global):
+                return
+            if any(name in guard for guard in self.lazy_guards):
+                # `if _client is None: _client = boto3.client(...)`. Losing this
+                # write on replay costs a re-initialisation, not correctness --
+                # the next call rebuilds it. Reporting it fires on the most
+                # common client-caching idiom in serverless.
+                return
+            self.h.outer_writes.append(
+                OuterWrite(
+                    target=name,
+                    loc=_loc(self.path, target),
+                    region=region,
+                    is_global=True,
+                    via=tuple(self.via),
+                )
+            )
+            return
+
         reaches_outward = isinstance(target, (ast.Subscript, ast.Attribute)) or augmented
         if not reaches_outward:
             return
@@ -327,6 +480,7 @@ class _Walker:
                     loc=_loc(self.path, target),
                     region=region,
                     is_global=self._is_module_level(root),
+                    via=tuple(self.via),
                 )
             )
 
@@ -344,6 +498,7 @@ class _Walker:
                     loc=_loc(self.path, node),
                     region=region,
                     is_global=self._is_module_level(root),
+                    via=tuple(self.via),
                 )
             )
 
@@ -359,7 +514,12 @@ class _Walker:
                 if d:
                     symbols.append(d)
         self.h.branches.append(
-            Branch(loc=_loc(self.path, node), region=region, condition_symbols=symbols)
+            Branch(
+                loc=_loc(self.path, node),
+                region=region,
+                condition_symbols=symbols,
+                via=tuple(self.via),
+            )
         )
 
     def _try_durable_operation(self, node: ast.Call, region: Region) -> bool:
@@ -478,6 +638,15 @@ def _collect_nested(handler_node: ast.AST) -> tuple[dict[str, ast.AST], set[str]
     return nested, step_bodies
 
 
+def _is_step_decorated(node: ast.AST, aliases: dict[str, str]) -> bool:
+    """True for a function whose body runs inside a step, not at its call site."""
+    for dec in getattr(node, "decorator_list", []):
+        dotted = _dotted(dec, aliases) or ""
+        if dotted.rsplit(".", 1)[-1] in _STEP_DECORATORS:
+            return True
+    return False
+
+
 def _is_durable_handler(node: ast.AST, aliases: dict[str, str]) -> bool:
     for dec in node.decorator_list:
         dotted = _dotted(dec, aliases) or ""
@@ -498,7 +667,7 @@ def parse_source(source: str, path: str) -> Module:
             continue
         handler = Handler(name=node.name, loc=_loc(path, node), language=Language.PYTHON)
         nested, step_bodies = _collect_nested(node)
-        _Walker(path, ctx, handler, nested, step_bodies).walk_function(
+        _Walker(path, ctx, handler, nested, step_bodies, node).walk_function(
             node, Region.DURABLE
         )
         module.handlers.append(handler)

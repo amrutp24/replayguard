@@ -88,6 +88,10 @@ class Call:
     #: How to render this call in a message, when the catalog key is not what
     #: the developer wrote — `Date` is the lookup key, `new Date()` is the code.
     display: str | None = None
+    #: Helper functions traversed to reach this call, outermost first. Empty
+    #: when the call sits directly in the handler. A violation inside a helper
+    #: is invisible at the call site, so the path is what makes it actionable.
+    via: tuple[str, ...] = ()
 
     @property
     def shown(self) -> str:
@@ -102,6 +106,10 @@ class Branch:
     region: Region
     #: Dotted names appearing in the condition, used to trace nondeterminism.
     condition_symbols: list[str] = field(default_factory=list)
+    #: Helper functions traversed to reach this branch, outermost first. Carried
+    #: for the same reason as on Call and OuterWrite: a branch inside a helper is
+    #: invisible at the call site.
+    via: tuple[str, ...] = ()
 
 
 @dataclass
@@ -117,6 +125,8 @@ class OuterWrite:
     region: Region
     #: True when the target is module-level rather than a captured closure var.
     is_global: bool = False
+    #: Helper functions traversed to reach this write, outermost first.
+    via: tuple[str, ...] = ()
 
 
 @dataclass

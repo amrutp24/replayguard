@@ -83,6 +83,12 @@ _AWS_MODULE_PREFIXES = ("@aws-sdk/", "aws-sdk")
 
 _FUNCTION_NODES = {"arrow_function", "function_expression", "function_declaration"}
 
+#: How far to follow calls out of the handler. The cost here is depth, not
+#: breadth: each level lengthens the path a reader has to hold in their head,
+#: and real handlers reach their I/O in one or two hops. Five is generous and
+#: still terminates on input designed to be pathological.
+_MAX_CALL_DEPTH = 5
+
 
 def _load_parser(dialect: str):
     """Build a parser lazily so the Python frontend needs no tree-sitter."""
@@ -181,6 +187,23 @@ def _unwrap(node):
     return node
 
 
+def _is_top_level_function(node) -> bool:
+    """True when nothing but the module encloses this function.
+
+    This is what decides whether the caller's locals are visible inside a
+    callee. A nested function is a closure and genuinely can see them; a
+    top-level one cannot, and letting the caller's scope leak in would make an
+    ordinary local of the helper look like a captured variable -- which inside
+    a step body reads as RG003, on correct code.
+    """
+    parent = node.parent
+    while parent is not None:
+        if parent.type in _FUNCTION_NODES:
+            return False
+        parent = parent.parent
+    return True
+
+
 def _descend(node, types: set[str]):
     """Yield descendants of the given types, without leaving nested functions."""
     for child in node.children:
@@ -250,6 +273,16 @@ class _Walker:
         self.ctx = ctx
         self.h = handler
         self.scopes: list[set[str]] = []
+        #: Helpers entered to reach the code being walked, outermost first.
+        #: Stamped onto every finding, because a violation inside a helper is
+        #: invisible at the call site the developer is looking at.
+        self.via: tuple[str, ...] = ()
+        #: (function, region) pairs already walked or currently being walked.
+        #: Both halves matter: without the node, mutual recursion never
+        #: terminates; without the region, a helper called from both sides of
+        #: the replay boundary would only be analysed on the side reached
+        #: first, and the two sides have opposite obligations.
+        self._walked: set[tuple[int, Region]] = set()
 
     # -- scope ------------------------------------------------------------
 
@@ -277,6 +310,15 @@ class _Walker:
     # -- entry ------------------------------------------------------------
 
     def walk_function(self, fn, region: Region) -> None:
+        # Idempotent per (function, region). No function legitimately needs
+        # walking twice in one region -- reaching one twice means recursion, or
+        # a body reachable both as a step callback and by a direct call -- and
+        # walking it again only duplicates its findings.
+        key = (fn.id, region)
+        if key in self._walked:
+            return
+        self._walked.add(key)
+
         self.scopes.append(set())
         params = fn.child_by_field_name("parameters")
         if params is not None:
@@ -327,6 +369,7 @@ class _Walker:
                         loc=self.src.loc(node),
                         region=region,
                         is_global=self._is_module_level(root),
+                        via=self.via,
                     )
                 )
         if left is not None:
@@ -367,12 +410,74 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=region,
                     external_client=bool(root and root in self.ctx.aws_names),
+                    via=self.via,
                 )
             )
             self._record_mutating_call(node, func, region)
 
+        resolved = self._resolve_callee(func)
+        if resolved is not None:
+            self._walk_helper(resolved[0], resolved[1], region)
+
         for child in node.children:
             self.visit(child, region)
+
+    # -- following calls out of the handler -------------------------------
+
+    def _resolve_callee(self, func):
+        """Resolve a callee to a function defined in this same file, if it is one.
+
+        Stopping at the handler body passes clean on a handler whose only job is
+        to call `readConfig()` -- which is the shape most real handlers have, so
+        the check was silent on exactly the code it exists for.
+        """
+        func = _unwrap(func)
+        if func is None or func.type != "identifier":
+            # A method call needs a receiver type, which this frontend does not
+            # track. Following only bare names keeps resolution honest.
+            return None
+        name = self.src.text(func)
+        target = self.ctx.declared.get(name)
+        if target is None:
+            return None
+        # A local binding of the same name shadows a top-level declaration, and
+        # what it holds -- a parameter, a callback off `event` -- is unknown.
+        # Walking the top-level body would then report a function that this
+        # call never reaches.
+        if _is_top_level_function(target) and self._is_bound_local(name):
+            return None
+        return name, target
+
+    def _walk_helper(self, name: str, fn, region: Region) -> None:
+        """Walk a resolved callee's body in the *caller's* region.
+
+        The region travels with the call. A helper invoked from the durable
+        region inherits the durable obligation -- its `fetch` re-runs on every
+        replay just as surely as one written inline -- and the same helper
+        invoked from inside a step body inherits none of it.
+        """
+        if (fn.id, region) in self._walked:
+            return
+        if len(self.via) >= _MAX_CALL_DEPTH:
+        # Past the cap the chain is not analysed. Record it as a coverage
+        # gap rather than stopping quietly: a silently truncated walk implies
+        # a clean bill of health the checker has not earned, which is the one
+        # thing RG900 exists to prevent. Depth-5 chains are rare, so this
+        # cannot reproduce the note-flood the RG900 tightening fixed.
+            self.h.unresolved.append(self.src.loc(fn))
+            return
+
+        outer_scopes, outer_via = self.scopes, self.via
+        # A top-level function is not a closure: it can see module scope and
+        # its own locals, nothing of the caller's. A nested one is, so its
+        # captured bindings must stay visible.
+        if _is_top_level_function(fn):
+            self.scopes = []
+        self.via = (*self.via, name)
+        try:
+            self.walk_function(fn, region)
+        finally:
+            self.scopes, self.via = outer_scopes, outer_via
 
     def _v_new_expression(self, node, region: Region) -> None:
         ctor = node.child_by_field_name("constructor")
@@ -389,6 +494,7 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=region,
                     display="new Date()",
+                    via=self.via,
                 )
             )
         for child in node.children:
@@ -412,6 +518,7 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=region,
                     is_global=self._is_module_level(root),
+                    via=self.via,
                 )
             )
 
@@ -428,7 +535,12 @@ class _Walker:
                 if ctor:
                     symbols.append(ctor)
         self.h.branches.append(
-            Branch(loc=self.src.loc(node), region=region, condition_symbols=symbols)
+            Branch(
+                loc=self.src.loc(node),
+                region=region,
+                condition_symbols=symbols,
+                via=self.via,
+            )
         )
 
     def _try_durable_operation(self, node, region: Region) -> bool:

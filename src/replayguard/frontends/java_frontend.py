@@ -18,6 +18,12 @@ therefore the real bug here, is mutating a captured mutable object
 (`receipts.add(x)`) and writing to instance or static fields. So Java's outer
 write surface is narrower than JavaScript's and shaped differently from
 Python's, and that knowledge lives in this file rather than in the rules.
+
+The walk follows calls into methods declared in the same file, carrying the
+caller's region with it, because a helper does not change the replay
+obligation. Resolution is deliberately narrow -- implicit receiver and `this.`
+only -- and the path taken is recorded on each finding, since a violation three
+frames down is invisible at the call site.
 """
 
 from __future__ import annotations
@@ -94,6 +100,12 @@ _MUTATORS = {
 }
 
 _LAMBDA_NODES = {"lambda_expression", "method_reference"}
+
+#: How many helper frames deep to follow a call chain. Real handlers delegate
+#: one or two levels; past that the path in the message stops being something a
+#: reader can hold in their head, and the cost of walking grows faster than the
+#: value of what it finds.
+_MAX_CALL_DEPTH = 5
 
 
 def _load_parser():
@@ -215,8 +227,32 @@ class _ClassContext:
             self.aws_names.add(name)
 
 
+def _collect_methods(src: _Src, root) -> dict[str, object]:
+    """Methods declared in this file, keyed by name.
+
+    Keyed by name alone, which conflates overloads: `render(int)` and
+    `render(String)` collapse to whichever the parser reaches last. Resolving
+    them properly needs argument types, and Java's type inference makes that a
+    much larger job than it looks. Overload sets in a handler class are rare
+    enough that the wrong-arity walk is a better trade than not following
+    helpers at all -- but it is a real limitation, not a rounding error.
+    """
+    methods: dict[str, object] = {}
+    for method in _descend(root, {"method_declaration"}):
+        name_node = method.child_by_field_name("name")
+        if name_node is not None:
+            methods[src.text(name_node)] = method
+    return methods
+
+
 class _Walker:
-    def __init__(self, src: _Src, ctx: _ClassContext, handler: Handler):
+    def __init__(
+        self,
+        src: _Src,
+        ctx: _ClassContext,
+        handler: Handler,
+        methods: dict[str, object] | None = None,
+    ):
         self.src = src
         self.ctx = ctx
         self.h = handler
@@ -224,6 +260,18 @@ class _Walker:
         #: Locals whose declared type is tainted, layered over class fields.
         self.local_tainted: dict[str, object] = {}
         self.local_aws: set[str] = set()
+        #: Same-file methods this walker may follow into. Empty means the walk
+        #: stops at the handler, which is what it did before.
+        self.methods: dict[str, object] = methods or {}
+        #: Helper frames entered to reach the current node, outermost first.
+        #: Stamped onto every Call and OuterWrite so a finding buried three
+        #: helpers down still says how the handler reaches it.
+        self.via: tuple[str, ...] = ()
+        #: (method node id, region) pairs being walked or already walked.
+        #: Never cleared: re-walking a method that two call sites reach would
+        #: report the same violation twice, and mutual recursion would not
+        #: terminate at all.
+        self.visited: set[tuple[int, Region]] = set()
 
     # -- scope ------------------------------------------------------------
 
@@ -345,9 +393,12 @@ class _Walker:
                     region=region,
                     external_client=self._is_aws(root),
                     display=dotted if effective != dotted else None,
+                    via=self.via,
                 )
             )
             self._record_mutating_call(node, region)
+
+        self._follow_local_method(node, region)
 
         for child in node.children:
             self.visit(child, region)
@@ -367,10 +418,66 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=region,
                     display=f"new {name}()",
+                    via=self.via,
                 )
             )
         for child in node.children:
             self.visit(child, region)
+
+    # -- interprocedural --------------------------------------------------
+
+    def _follow_local_method(self, node, region: Region) -> None:
+        """Walk into a call that resolves to a method declared in this file.
+
+        A helper does not change the replay obligation: whatever region the
+        caller is in, the callee runs in. So `Files.readString` two frames below
+        the handler is exactly as broken as one written inline, and the checker
+        used to see none of it.
+
+        Only the implicit receiver and `this.` are followed. A call on any other
+        object needs the receiver's runtime type to resolve, and guessing there
+        would either invent violations in code this file cannot see or attribute
+        them to the wrong method -- both worse than the silence.
+        """
+        name_node = node.child_by_field_name("name")
+        if name_node is None:
+            return
+        obj = node.child_by_field_name("object")
+        if obj is not None and obj.type != "this":
+            return
+        target = self.methods.get(self.src.text(name_node))
+        if target is not None:
+            self._walk_method(self.src.text(name_node), target, region)
+
+    def _walk_method(self, name: str, node, region: Region) -> None:
+        key = (node.id, region)
+        if key in self.visited:
+            return
+        if len(self.via) >= _MAX_CALL_DEPTH:
+        # Past the cap the chain is not analysed. Record it as a coverage
+        # gap rather than stopping quietly: a silently truncated walk implies
+        # a clean bill of health the checker has not earned, which is the one
+        # thing RG900 exists to prevent. Depth-5 chains are rare, so this
+        # cannot reproduce the note-flood the RG900 tightening fixed.
+            self.h.unresolved.append(self.src.loc(node))
+            return
+        self.visited.add(key)
+
+        # A method is not a closure: the caller's locals are not in scope inside
+        # it, so keeping the caller's scope stack would make an unrelated local
+        # of the same name look like a captured variable and suppress a real
+        # RG003. Class fields survive the swap because they live on the shared
+        # _ClassContext, which is exactly right -- fields are visible from
+        # anywhere in the class.
+        saved = (self.scopes, self.local_tainted, self.local_aws, self.via)
+        self.scopes = []
+        self.local_tainted = {}
+        self.local_aws = set()
+        self.via = self.via + (name,)
+        try:
+            self.walk_callable(node, region)
+        finally:
+            self.scopes, self.local_tainted, self.local_aws, self.via = saved
 
     # -- recording --------------------------------------------------------
 
@@ -393,6 +500,7 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=Region.STEP_BODY,
                     is_global=is_global,
+                    via=self.via,
                 )
             )
 
@@ -436,6 +544,7 @@ class _Walker:
                     loc=self.src.loc(node),
                     region=region,
                     is_global=self._is_field(root),
+                    via=self.via,
                 )
             )
 
@@ -455,7 +564,12 @@ class _Walker:
             if tainted is not None:
                 symbols.append(_TAINT_KEY[tainted])
         self.h.branches.append(
-            Branch(loc=self.src.loc(node), region=region, condition_symbols=symbols)
+            Branch(
+                loc=self.src.loc(node),
+                region=region,
+                condition_symbols=symbols,
+                via=self.via,
+            )
         )
 
     def _try_durable_operation(self, node, region: Region) -> bool:
@@ -501,7 +615,11 @@ class _Walker:
             # findings, so absence of a lambda is not by itself a gap.
             return True
         if body_node.type == "method_reference":
-            # `this::doWork` -- resolving it needs interprocedural analysis.
+            # `this::doWork` is still reported as a gap. The target is now
+            # walkable, but binding it as the step body means matching the
+            # callback's parameter shape, and a wrong match would analyse the
+            # method in the wrong region -- the failure mode this file works
+            # hardest to avoid. The honest note stays until that is resolved.
             self.h.unresolved.append(self.src.loc(body_node))
             return True
         self.walk_callable(body_node, Region.STEP_BODY)
@@ -568,11 +686,16 @@ def parse_source(source: str, path: str) -> Module:
     tree = parser.parse(data)
     src = _Src(data, path)
     ctx = _ClassContext(src, tree.root_node)
+    methods = _collect_methods(src, tree.root_node)
     module = Module(path=path, language=Language.JAVA)
 
     for name, method in _find_handlers(src, tree.root_node):
         handler = Handler(name=name, loc=src.loc(method), language=Language.JAVA)
-        walker = _Walker(src, ctx, handler)
+        walker = _Walker(src, ctx, handler, methods)
+        # The handler's own body is walked here rather than through
+        # _walk_method, so record it as visited or a self-recursive call would
+        # walk it a second time and report every violation in it twice.
+        walker.visited.add((method.id, Region.DURABLE))
         walker.scopes.append(set())
         params = method.child_by_field_name("parameters")
         if params is not None:

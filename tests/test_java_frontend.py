@@ -131,3 +131,193 @@ def test_body_located_by_kind_not_position(good):
 
 def test_io_inside_step_body_is_not_reported(good):
     assert not [f for f in good if f.rule in {"RG001", "RG002"}]
+
+
+# -- interprocedural analysis -----------------------------------------------
+#
+# Analysis used to stop at the handler method, so anything a private helper did
+# was invisible. A helper does not change the replay obligation -- whatever
+# region the caller is in, the callee runs in -- so these check that the walk
+# follows same-file calls, carries the region across, and terminates.
+
+
+def findings_for_source(source: str):
+    module = java_frontend.parse_source(source, "H.java")
+    assert module.handlers, "no durable handler found"
+    return list(rules.check(module.handlers[0]))
+
+
+def _handler(body: str, extra: str = "") -> str:
+    return (
+        "import java.nio.file.Files;\n"
+        "import java.nio.file.Path;\n"
+        "import java.time.Instant;\n"
+        "public class H extends DurableHandler<In, Out> {\n"
+        "    public String handleRequest(In input, DurableContext context) {\n"
+        f"{body}\n"
+        "    }\n"
+        f"{extra}\n"
+        "}\n"
+    )
+
+
+def test_io_in_private_helper_called_from_durable_region_is_flagged():
+    """The bug that motivated this: a helper hid a real RG002.
+
+    `Files.readString` two frames below the handler is exactly as broken as one
+    written inline, and the checker reported nothing at all.
+    """
+    findings = findings_for_source(
+        _handler(
+            "        String config = readConfig();\n        return config;",
+            "    private String readConfig() throws Exception {\n"
+            "        return Files.readString(Path.of(\"/tmp/c.json\"));\n"
+            "    }",
+        )
+    )
+    hits = [f for f in findings if f.rule == "RG002"]
+    assert hits, findings
+    assert "Files.readString" in hits[0].message
+    # The call site says nothing about the violation, so the message has to say
+    # which helper to open.
+    assert "readConfig()" in hits[0].rationale
+
+
+def test_helper_path_is_reported_through_several_frames():
+    findings = findings_for_source(
+        _handler(
+            "        return deeper();",
+            "    private String deeper() { return level2(); }\n"
+            "    private String level2() { return Instant.now().toString(); }",
+        )
+    )
+    hits = [f for f in findings if f.rule == "RG001"]
+    assert hits
+    assert "deeper() -> level2()" in hits[0].rationale
+
+
+def test_this_qualified_helper_call_resolves():
+    findings = findings_for_source(
+        _handler(
+            "        return this.readClock();",
+            "    private String readClock() { return Instant.now().toString(); }",
+        )
+    )
+    assert [f.rule for f in findings if f.rule == "RG001"] == ["RG001"]
+
+
+def test_call_on_another_object_is_not_followed():
+    """Only the implicit receiver and `this.` resolve.
+
+    `other.readClock()` needs the receiver's runtime type. Guessing would either
+    invent violations in code this file cannot see or pin them on the wrong
+    method, so the walk stops -- a known limitation, deliberately chosen.
+    """
+    findings = findings_for_source(
+        _handler(
+            "        H other = new H();\n        return other.readClock();",
+            "    private String readClock() { return Instant.now().toString(); }",
+        )
+    )
+    assert not [f for f in findings if f.rule == "RG001"], findings
+
+
+def test_helper_called_only_from_a_step_body_is_not_flagged():
+    """Region carries across the call, and inside a step I/O is the point.
+
+    GoodHandler's `render()` covers the same ground; this states it directly,
+    because a checker that follows helpers but loses the region would fire on
+    every correct handler that delegates its step work.
+    """
+    findings = findings_for_source(
+        _handler(
+            "        return context.step(\"read\", String.class, stepCtx -> loadIt());",
+            "    private String loadIt() throws Exception {\n"
+            "        return Files.readString(Path.of(\"/tmp/c.json\"));\n"
+            "    }",
+        )
+    )
+    assert not [f for f in findings if f.rule in {"RG001", "RG002"}], findings
+
+
+def test_outer_write_inside_a_helper_reports_the_helper_path():
+    findings = findings_for_source(
+        "public class H extends DurableHandler<In, Out> {\n"
+        "    private String lastReceipt;\n"
+        "    public String handleRequest(In input, DurableContext context) {\n"
+        "        return context.step(\"s\", String.class, stepCtx -> record(\"r\"));\n"
+        "    }\n"
+        "    private String record(String r) {\n"
+        "        String lastReceipt = r;\n"
+        "        this.lastReceipt = r;\n"
+        "        return r;\n"
+        "    }\n"
+        "}\n"
+    )
+    hits = [f for f in findings if f.rule == "RG003"]
+    assert len(hits) == 1, findings
+    assert "lastReceipt" in hits[0].message
+    assert "record()" in hits[0].rationale
+
+
+def test_direct_recursion_terminates():
+    findings = findings_for_source(
+        _handler(
+            "        return spin();",
+            "    private String spin() { return spin() + Instant.now(); }",
+        )
+    )
+    assert len([f for f in findings if f.rule == "RG001"]) == 1, findings
+
+
+def test_mutual_recursion_terminates():
+    findings = findings_for_source(
+        _handler(
+            "        return a();",
+            "    private String a() { return b() + Instant.now(); }\n"
+            "    private String b() { return a(); }",
+        )
+    )
+    assert len([f for f in findings if f.rule == "RG001"]) == 1, findings
+
+
+def test_helper_chain_depth_is_capped():
+    chain = "\n".join(
+        f"    private String f{i}() {{ return f{i + 1}(); }}" for i in range(8)
+    )
+    findings = findings_for_source(
+        _handler(
+            "        return f0();",
+            chain + "\n    private String f8() { return Instant.now().toString(); }",
+        )
+    )
+    assert not [f for f in findings if f.rule == "RG001"], (
+        "a chain deeper than the cap must stop, not report"
+    )
+
+
+def test_method_reference_step_body_is_not_double_walked():
+    """`this::shared` stays unresolved even though `shared` is now walkable.
+
+    Resolving it would need the target's parameter shape to line up with the
+    step callback, and the note is honest about the gap. What must not happen is
+    the method being walked once as a helper and again as a step body, which
+    would report the same line twice under two different regions.
+    """
+    findings = findings_for_source(
+        _handler(
+            "        String a = shared();\n"
+            "        context.step(\"s\", String.class, this::shared);\n"
+            "        return a;",
+            "    private String shared() { return Instant.now().toString(); }",
+        )
+    )
+    assert len([f for f in findings if f.rule == "RG001"]) == 1, findings
+    assert [f for f in findings if f.rule == "RG900"], "the gap is still reported"
+
+
+def test_good_handler_helper_stays_clean(good):
+    """GoodHandler's `render()` is called from inside a step. Following it must
+    not turn the project's most important invariant -- zero findings on correct
+    code -- into a false positive."""
+    assert good == []

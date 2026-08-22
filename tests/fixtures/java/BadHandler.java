@@ -43,9 +43,9 @@ public class BadHandler extends DurableHandler<Order, OrderResult> {
         // RG001 -- method on a field whose declared type is Random
         int jitter = rng.nextInt(100);
 
-        // RG002 -- filesystem outside a step.
-        // Inlined deliberately: calls into private helpers are not followed,
-        // which is a known interprocedural limitation.
+        // RG002 -- filesystem outside a step, written inline. The same call
+        // reached through a private helper is covered by the interprocedural
+        // tests in test_java_frontend.py.
         String config;
         try {
             config = Files.readString(Path.of("/tmp/config.json"));

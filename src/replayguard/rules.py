@@ -13,6 +13,17 @@ from . import catalog
 from .findings import Confidence, Finding, Severity
 from .ir import Handler, Region
 
+
+def _through(via: tuple[str, ...]) -> str:
+    """Render the helper path that leads to a finding.
+
+    A violation inside a helper is invisible at the call site, so naming the
+    route is the difference between an actionable finding and a confusing one.
+    """
+    if not via:
+        return ""
+    return " Reached from the handler through " + " -> ".join(f"{n}()" for n in via) + "."
+
 #: Registry populated by @rule. Order here is presentation order.
 _RULES: list = []
 
@@ -44,7 +55,7 @@ def rg001_nondeterministic_call(h: Handler) -> Iterator[Finding]:
             loc=call.loc,
             severity=Severity.ERROR,
             confidence=Confidence.HIGH,
-            rationale=f"On replay, {cat.why}.",
+            rationale=f"On replay, {cat.why}." + _through(call.via),
             fix=f"Move `{call.shown}` inside a `step()` and use the returned "
             "value, so the result is checkpointed once and reused on replay.",
         )
@@ -71,7 +82,8 @@ def rg002_external_io(h: Handler) -> Iterator[Finding]:
             loc=call.loc,
             severity=Severity.ERROR,
             confidence=Confidence.HIGH if cat else Confidence.MEDIUM,
-            rationale=f"On replay, {why}. Side effects are repeated, not resumed.",
+            rationale=f"On replay, {why}. Side effects are repeated, not "
+            "resumed." + _through(call.via),
             fix="Wrap the call in a `step()` so it executes once and the result "
             "is checkpointed.",
         )
@@ -101,7 +113,7 @@ def rg003_outer_write_in_step(h: Handler) -> Iterator[Finding]:
             rationale="Step bodies do not re-run on replay: the cached result "
             "is returned and the body is skipped, so this write is silently "
             "lost. The first run looks correct, which is what makes it "
-            "dangerous.",
+            "dangerous." + _through(w.via),
             fix=f"Return the value from the step, then apply it to "
             f"`{w.target}` outside the step body. Work done outside is "
             "rebuilt from the checkpointed result on replay; work done "
@@ -132,7 +144,8 @@ def rg004_nondeterministic_branch(h: Handler) -> Iterator[Finding]:
             severity=Severity.ERROR,
             confidence=Confidence.MEDIUM,
             rationale="Replay may take the other branch, producing a different "
-            "sequence of steps than the one that was checkpointed.",
+            "sequence of steps than the one that was checkpointed."
+            + _through(br.via),
             fix="Checkpoint the decision itself - compute it inside a `step()` "
             "and branch on the returned value.",
         )
