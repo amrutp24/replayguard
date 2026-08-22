@@ -87,6 +87,15 @@ failure than a missed bug and gets its own gate.
 pip install -e ".[dev]"
 ```
 
+## How far to trust it
+
+[VALIDATION.md](VALIDATION.md) records what has actually been tested, against
+whose code, and what is still unproven -- including the rules that have **never**
+produced a true positive outside this repository's own fixtures, and the false
+positives still known to be present.
+
+Read it before relying on a clean run.
+
 ## Rules
 
 | ID | What it catches | Why it breaks replay |
