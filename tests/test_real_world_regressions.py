@@ -274,7 +274,10 @@ def test_lazy_initialised_client_is_not_reported():
 def test_unguarded_global_write_from_a_step_is_still_reported():
     """The guard must not silence a genuine lost update."""
     findings = py_findings(
-        "    return context.step(lambda _: record(), name='rec')",
+        # TOTAL is read back outside the step, so the lost write really does
+        # corrupt the handler's result.
+        "    context.step(lambda _: record(), name='rec')\n"
+        "    return TOTAL",
         extra=(
             "TOTAL = 0\n"
             "def record():\n"
@@ -363,3 +366,68 @@ def test_template_literal_name_is_still_checked():
         "  await context.step(`op-${Date.now()}`, async () => 1);",
     )
     assert [f for f in findings if f.rule == "RG005"], findings
+
+
+# -- 13. RG003 read-back reachability ---------------------------------------
+
+
+def test_write_only_instrument_is_not_a_lost_update():
+    """A log written in step bodies and never read cannot corrupt anything.
+
+    Four such findings against `article3-scenarios.test.ts`. Losing the write on
+    replay costs nothing when nothing consumes the value.
+    """
+    findings = ts_findings(
+        "  const log: string[] = [];\n"
+        "  await context.step('a', async () => { log.push('a'); });\n"
+        "  await context.step('b', async () => { log.push('b'); });\n"
+        "  return { ok: true };",
+    )
+    assert not [f for f in findings if f.rule == "RG003"], findings
+
+
+def test_value_read_back_outside_the_step_is_reported():
+    findings = ts_findings(
+        "  let attempts = 0;\n"
+        "  await context.step('retry', async () => { attempts++; });\n"
+        "  return { attempts };",
+    )
+    assert [f for f in findings if f.rule == "RG003"], findings
+
+
+def test_value_read_in_a_different_step_body_is_reported():
+    """The saga shape. Neither body re-runs, so the reader still sees stale state.
+
+    A naive "is it read in the durable region?" check would have suppressed the
+    strongest true positive this tool has.
+    """
+    findings = ts_findings(
+        "  const done: string[] = [];\n"
+        "  await context.step('one', async () => { done.push('one'); });\n"
+        "  await context.runInChildContext(async (child: DurableContext) => {\n"
+        "    for (const d of done.reverse()) { await child.step(d, async () => 1); }\n"
+        "  });",
+    )
+    hits = [f for f in findings if f.rule == "RG003"]
+    assert hits, findings
+    assert "done" in hits[0].message
+
+
+def test_discarded_mutation_is_a_write_but_a_consumed_one_is_also_a_read():
+    """`log.push(x);` writes. `for (... of log.reverse())` writes *and* reads.
+
+    Excluding every mutation receiver from reads suppressed the saga finding,
+    because its compensation loop consumes the array `reverse()` returns.
+    """
+    discarded = ts_findings(
+        "  const a: string[] = [];\n"
+        "  await context.step('s', async () => { a.push('x'); });\n"
+        "  return { ok: true };",
+    )
+    consumed = ts_findings(
+        "  const b: string[] = [];\n"
+        "  await context.step('s', async () => { b.push('x'); });\n"
+        "  return { first: b.reverse()[0] };",
+    )
+    assert not [f for f in discarded if f.rule == "RG003"], discarded
+    assert [f for f in consumed if f.rule == "RG003"], consumed

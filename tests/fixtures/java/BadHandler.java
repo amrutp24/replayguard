@@ -83,7 +83,10 @@ public class BadHandler extends DurableHandler<Order, OrderResult> {
         // RG900 -- method reference body, not resolvable without interprocedural analysis
         ctx.step("external", String.class, this::externalBody);
 
-        return new OrderResult(runId, shift, jitter, startedAt, stamp, correlationId, config);
+        // Read back outside the step: this is what turns the writes above into
+        // a lost update rather than a harmless write-only log.
+        return new OrderResult(runId, shift, jitter, startedAt, stamp,
+                correlationId, config, receipts.size(), AUDIT.size(), lastReceipt);
     }
 
     private String externalBody(Object stepCtx) {

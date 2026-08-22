@@ -243,7 +243,11 @@ def test_module_level_helper_is_not_treated_as_a_closure():
     every handler that delegates to a helper starts crying wolf.
     """
     findings = source_findings(
-        "    return context.step(lambda _: record({}), name='record')",
+        # AUDIT is read back outside the step, so it is a genuine lost update and
+        # serves as the positive control. `bucket` is the helper's own parameter
+        # and must never be reported.
+        "    context.step(lambda _: record({}), name='record')\n"
+        "    return len(AUDIT)",
         extra="AUDIT = []\ndef record(bucket):\n    bucket['done'] = True\n    AUDIT.append(1)",
     )
     targets = [f.message for f in findings if f.rule == "RG003"]

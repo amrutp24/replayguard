@@ -243,7 +243,10 @@ def test_helper_used_as_a_step_body_is_not_double_walked():
     """
     findings = findings_for_source(
         "  await context.step('a', writeIt);\n"
-        "  await context.step('b', async () => { await writeIt(); });",
+        "  await context.step('b', async () => { await writeIt(); });\n"
+        # Read back outside the steps, so the lost write is a genuine one and
+        # the test is measuring double-reporting rather than suppression.
+        "  return AUDIT.length;",
         extra=(
             "const AUDIT: string[] = [];\n"
             "async function writeIt() { AUDIT.push('x'); }"

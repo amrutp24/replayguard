@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 from . import catalog
 from .findings import Confidence, Finding, Severity
-from .ir import Handler, Region
+from .ir import Handler, OuterWrite, Region
 
 
 def _through(via: tuple[str, ...]) -> str:
@@ -89,6 +89,32 @@ def rg002_external_io(h: Handler) -> Iterator[Finding]:
         )
 
 
+def _is_read_elsewhere(h: Handler, w: OuterWrite) -> bool:
+    """Is the written value ever consumed somewhere the write may not have run?
+
+    Step bodies do not re-run on replay, so a write inside one is lost. That only
+    *matters* if something reads the value later. Three cases:
+
+      * read in the durable region  -> stale value reaches the handler. Lost.
+      * read in a *different* step body -> that body did not re-run either, so
+        the value it sees is still stale. Lost.
+      * read only inside the same step body -> everything that consumes it ran
+        in the same execution as the write. Harmless.
+
+    The third case is the write-only observability instrument -- a log, a
+    counter, a span collector -- which is common and correct, and which this
+    rule reported as a bug until the check existed.
+    """
+    for r in h.reads:
+        if r.name != w.target:
+            continue
+        if r.region is not Region.STEP_BODY:
+            return True
+        if r.step_id != w.step_id:
+            return True
+    return False
+
+
 @rule
 def rg003_outer_write_in_step(h: Handler) -> Iterator[Finding]:
     """RG003 - a step body writing to state it does not own.
@@ -102,6 +128,8 @@ def rg003_outer_write_in_step(h: Handler) -> Iterator[Finding]:
     """
     for w in h.outer_writes:
         if w.region is not Region.STEP_BODY:
+            continue
+        if not _is_read_elsewhere(h, w):
             continue
         scope = "module-level state" if w.is_global else "a captured variable"
         yield Finding(

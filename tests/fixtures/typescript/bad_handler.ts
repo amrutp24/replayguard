@@ -60,7 +60,10 @@ const handler = async (event: any, context: DurableContext) => {
   // RG900 — step body passed as an unresolvable reference
   await context.step("external", externalBody);
 
-  return { runId, shift, jitter, correlationId, startedAt, stamp, profile };
+  // Read back outside the step: this is what turns the writes above into a
+  // lost update rather than a harmless write-only log.
+  return { runId, shift, jitter, correlationId, startedAt, stamp, profile,
+           receipts, lastReceipt, state, audit: AUDIT.length };
 };
 
 export const lambdaHandler = withDurableExecution(handler);

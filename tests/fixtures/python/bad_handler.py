@@ -70,7 +70,11 @@ def lambda_handler(event, context: DurableContext):
     # RG900 — step body passed by reference, so its region is unresolved
     context.step(_helper, name="helper")
 
-    return {"run_id": run_id, "shift": shift, "jitter": jitter, "profile": profile}
+    # Read back outside the step: this is what turns the writes above into a
+    # lost update rather than a harmless write-only log.
+    return {"run_id": run_id, "shift": shift, "jitter": jitter,
+            "profile": profile, "receipts": receipts, "audit": len(AUDIT),
+            "state": state}
 
 
 def _helper(_):

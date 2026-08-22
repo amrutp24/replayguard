@@ -20,6 +20,7 @@ from ..ir import (
     Location,
     Module,
     OuterWrite,
+    Read,
     Region,
     Step,
 )
@@ -217,6 +218,15 @@ class _Walker:
         #: Names inside an `if X is None:` guard. A write there is idempotent
         #: lazy initialisation, not a lost update.
         self.lazy_guards: list[set[str]] = []
+        #: Identity of the step body currently being walked, None in the durable
+        #: region. RG003 compares this against a read's step id to tell a lost
+        #: update from a write nothing ever consumes.
+        self.current_step_id: int | None = None
+        self._step_counter = 0
+        #: Name nodes that are receivers of in-place mutations.
+        self._mutation_receivers: set = set()
+        #: Calls whose return value is thrown away (a bare expression statement).
+        self._discarded_calls: set = set()
         #: Helper names currently being walked through, outermost first. Copied
         #: onto every node recorded while it is non-empty, so a finding buried
         #: two `def`s away still tells the reader how the handler reaches it.
@@ -287,6 +297,28 @@ class _Walker:
             self.visit(child, region)
 
     # -- statements -------------------------------------------------------
+
+    def _v_Expr(self, node: ast.Expr, region: Region) -> None:
+        """A bare expression statement discards its value."""
+        if isinstance(node.value, ast.Call):
+            self._discarded_calls.add(node.value)
+        self.visit(node.value, region)
+
+    def _v_Name(self, node: ast.Name, region: Region) -> None:
+        # The receiver of `log.append(x)` is a write target, not a consumer.
+        # Recording it as a read made write-only instruments look like
+        # cross-step reads and defeated RG003's read-back check.
+        if node in self._mutation_receivers:
+            return
+        if isinstance(node.ctx, ast.Load):
+            self.h.reads.append(
+                Read(
+                    name=node.id,
+                    loc=_loc(self.path, node),
+                    region=region,
+                    step_id=self.current_step_id,
+                )
+            )
 
     def _v_Assign(self, node: ast.Assign, region: Region) -> None:
         for t in node.targets:
@@ -465,6 +497,7 @@ class _Walker:
                     region=region,
                     is_global=True,
                     via=tuple(self.via),
+                    step_id=self.current_step_id,
                 )
             )
             return
@@ -481,6 +514,7 @@ class _Walker:
                     region=region,
                     is_global=self._is_module_level(root),
                     via=tuple(self.via),
+                    step_id=self.current_step_id,
                 )
             )
 
@@ -491,6 +525,13 @@ class _Walker:
         if not isinstance(node.func, ast.Attribute) or node.func.attr not in _MUTATORS:
             return
         root = _root_name(node.func.value)
+        if isinstance(node.func.value, ast.Name) and node in self._discarded_calls:
+        # Exclude only when the result is discarded. `log.push(x);` as a
+        # statement is a pure write. But `for (const s of items.reverse())`
+        # consumes the returned array -- it is a mutation *and* a read, and
+        # treating it as write-only suppressed the saga finding this tool exists
+        # to catch.
+            self._mutation_receivers.add(node.func.value)
         if root and self._is_outer(root):
             self.h.outer_writes.append(
                 OuterWrite(
@@ -499,6 +540,7 @@ class _Walker:
                     region=region,
                     is_global=self._is_module_level(root),
                     via=tuple(self.via),
+                    step_id=self.current_step_id,
                 )
             )
 
@@ -567,10 +609,16 @@ class _Walker:
                 self.h.unresolved.append(_loc(self.path, arg))
                 break
             return True
-        if isinstance(body, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
-            self.walk_function(body, Region.STEP_BODY)
-        else:
-            self.walk_function(self.nested_defs[body.id], Region.STEP_BODY)
+        self._step_counter += 1
+        saved_step = self.current_step_id
+        self.current_step_id = self._step_counter
+        try:
+            if isinstance(body, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.walk_function(body, Region.STEP_BODY)
+            else:
+                self.walk_function(self.nested_defs[body.id], Region.STEP_BODY)
+        finally:
+            self.current_step_id = saved_step
         return True
 
     def _looks_like_unresolved_callable(self, node: ast.AST) -> bool:

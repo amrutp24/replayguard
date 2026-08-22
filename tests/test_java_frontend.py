@@ -245,7 +245,10 @@ def test_outer_write_inside_a_helper_reports_the_helper_path():
         "public class H extends DurableHandler<In, Out> {\n"
         "    private String lastReceipt;\n"
         "    public String handleRequest(In input, DurableContext context) {\n"
-        "        return context.step(\"s\", String.class, stepCtx -> record(\"r\"));\n"
+        "        context.step(\"s\", String.class, stepCtx -> record(\"r\"));\n"
+        # Read back outside the step: without this the write is a write-only
+        # instrument, which RG003 now correctly ignores.
+        "        return this.lastReceipt;\n"
         "    }\n"
         "    private String record(String r) {\n"
         "        String lastReceipt = r;\n"

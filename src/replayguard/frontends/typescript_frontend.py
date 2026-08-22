@@ -25,6 +25,7 @@ from ..ir import (
     Location,
     Module,
     OuterWrite,
+    Read,
     Region,
     Step,
 )
@@ -292,6 +293,11 @@ class _Walker:
         self.ctx = ctx
         self.h = handler
         self.scopes: list[set[str]] = []
+        #: Identity of the step body being walked, None in the durable region.
+        #: RG003 compares it against a read's step id to tell a lost update from
+        #: a write that nothing ever consumes.
+        self.current_step_id: int | None = None
+        self._step_counter = 0
         #: Helpers entered to reach the code being walked, outermost first.
         #: Stamped onto every finding, because a violation inside a helper is
         #: invisible at the call site the developer is looking at.
@@ -327,6 +333,16 @@ class _Walker:
         )
 
     # -- entry ------------------------------------------------------------
+
+    def enter_step_body(self, fn) -> None:
+        """Walk a step body under a fresh step identity."""
+        self._step_counter += 1
+        saved = self.current_step_id
+        self.current_step_id = self._step_counter
+        try:
+            self.walk_function(fn, Region.STEP_BODY)
+        finally:
+            self.current_step_id = saved
 
     def walk_function(self, fn, region: Region) -> None:
         # Idempotent per (function, region). No function legitimately needs
@@ -389,6 +405,7 @@ class _Walker:
                         region=region,
                         is_global=self._is_module_level(root),
                         via=self.via,
+                        step_id=self.current_step_id,
                     )
                 )
         if left is not None:
@@ -414,6 +431,7 @@ class _Walker:
                         region=region,
                         is_global=self._is_module_level(root),
                         via=self.via,
+                        step_id=self.current_step_id,
                     )
                 )
         for child in node.children:
@@ -452,6 +470,54 @@ class _Walker:
             self.visit(child, region)
 
     _v_function_expression = _v_arrow_function
+
+    def _is_mutation_receiver(self, node) -> bool:
+        """Is this identifier the receiver of an in-place mutation?
+
+        `log.push(x)` writes to `log`; it does not consume it. Recording the
+        receiver as a read made a write-only instrument look like a cross-step
+        read -- push in step A, "read" in step B -- so RG003's read-back check
+        never suppressed it. The receiver of a mutation is a write target, not a
+        consumer.
+        """
+        parent = node.parent
+        if parent is None or parent.type != "member_expression":
+            return False
+        # Compare node ids, not object identity: tree-sitter builds a fresh
+        # Python wrapper on every access, so `is` is always False here.
+        receiver = parent.child_by_field_name("object")
+        if receiver is None or receiver.id != node.id:
+            return False
+        prop = parent.child_by_field_name("property")
+        if prop is None or self.src.text(prop) not in _MUTATORS:
+            return False
+        call = parent.parent
+        if call is None or call.type != "call_expression":
+            return False
+        # Exclude only when the result is discarded. `log.push(x);` as a
+        # statement is a pure write. But `for (const s of items.reverse())`
+        # consumes the returned array -- it is a mutation *and* a read, and
+        # treating it as write-only suppressed the saga finding this tool exists
+        # to catch.
+        return call.parent is not None and call.parent.type == "expression_statement"
+
+    def _v_identifier(self, node, region: Region) -> None:
+        if self._is_mutation_receiver(node):
+            return
+        self.h.reads.append(
+            Read(
+                name=self.src.text(node),
+                loc=self.src.loc(node),
+                region=region,
+                step_id=self.current_step_id,
+            )
+        )
+
+    #: `return { attempts }` is shorthand property syntax and gets its own node
+    #: type, so it is a read of `attempts` that a plain identifier handler misses
+    #: -- and shorthand is the idiomatic way to return accumulated state.
+    _v_shorthand_property_identifier = _v_identifier
+    _v_shorthand_property_identifier_pattern = _v_identifier
 
     def _v_call_expression(self, node, region: Region) -> None:
         if self._try_durable_operation(node, region):
@@ -576,6 +642,7 @@ class _Walker:
                     region=region,
                     is_global=self._is_module_level(root),
                     via=self.via,
+                    step_id=self.current_step_id,
                 )
             )
 
@@ -664,7 +731,7 @@ class _Walker:
                 continue
             for element in arg.children:
                 if element.is_named and element.type in _FUNCTION_NODES:
-                    self.walk_function(element, Region.STEP_BODY)
+                    self.enter_step_body(element)
 
         if body_node is None:
             # An identifier that is not a known declaration and not a local is
@@ -683,9 +750,9 @@ class _Walker:
                     break
             return True
         if body_node.type in _FUNCTION_NODES:
-            self.walk_function(body_node, Region.STEP_BODY)
+            self.enter_step_body(body_node)
         else:
-            self.walk_function(self.ctx.declared[self.src.text(body_node)], Region.STEP_BODY)
+            self.enter_step_body(self.ctx.declared[self.src.text(body_node)])
         return True
 
     def _step_name(self, name_node) -> tuple[str | None, bool, list[str]]:

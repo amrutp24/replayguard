@@ -40,10 +40,15 @@ covered, and that is where every real bug in this tool was found.
 |---|---:|---:|---:|---|
 | RG001 clock/random/identity | 11 | 2 | yes | none known |
 | RG002 external I/O | 0 | 0 | **never fired** | n/a |
-| RG003 outer write in step | 1 | 10 | yes | 4 (see below) |
+| RG003 outer write in step | 0 | 5 | yes | **none known** |
 | RG004 nondeterministic branch | 0 | 0 | **never fired** | none known |
 | RG005 unstable operation name | 0 | 0 | **never fired** | none known |
 | RG900 coverage gap (note) | 32 | 19 | n/a | n/a |
+
+**RG003 now has a read-back reachability check** (added 2026-08-19): a write in a
+step body is only reported when the value is read somewhere the write may not
+have run -- the durable region, or a *different* step body. All four known false
+positives are gone and no true positive was lost.
 
 ### Confidence, honestly
 
@@ -53,9 +58,9 @@ finding is confirmed by the code's own author, who named the file
 `handler-with-violation.ts`, shipped a matching `handler-fixed.ts`, and wrote a
 test asserting the bug manifests.
 
-**Partly proven.** RG003. It has real catches — the saga below, and two
-`resizeAttempts` counters — but four of its ten current findings are known false
-positives.
+**Proven, with caveats.** RG003. All five of its current findings are confirmed
+true positives -- the saga, and two `resizeAttempts` counters -- with no known
+false positives remaining after the read-back check.
 
 **Unproven.** RG002, RG004, RG005 have **never produced a true positive on code
 written by someone else.** They pass unit tests and fire correctly on constructed
@@ -91,19 +96,29 @@ deliberate, documented violation with a matching fixed variant. Author-confirmed
 
 ---
 
-## Known false positives — still present
+## Known false positives
 
-**Four RG003 findings on write-only observability instruments**
-(`article3-scenarios.test.ts` lines 231/236/241/246). `executionLog` is written
-inside step bodies and never read outside them, so losing the write cannot
-corrupt anything.
+**None currently known.** The four write-only observability instruments in
+`article3-scenarios.test.ts` were cleared by the read-back check.
 
-The principled fix is a **read-back reachability check**: if state written in a
-step body is never read outside it, suppress. That one dataflow condition would
-clear these four, subsume the hand-coded lazy-init special case, and is the
-general form of both.
+One known mislabelling remains: closure variables are sometimes reported as
+"module-level state". The finding is correct; the wording is not.
 
-A related mislabelling: closure variables are reported as "module-level state".
+### The read-back check, and the trap in it
+
+The condition is *not* "is it read in the durable region?" -- that would have
+suppressed the saga, whose compensation list is read inside a
+`runInChildContext` body. Neither that body nor the step bodies re-run on
+replay, so a value written in one and read in another is still stale. The
+condition is **read anywhere other than the step body that wrote it**.
+
+A second trap: excluding every mutation receiver from reads (on the grounds that
+`log.push(x)` writes rather than consumes) also suppressed the saga, because its
+loop consumes the array `reverse()` returns. The exclusion applies only when the
+result is **discarded** -- a bare expression statement.
+
+Both traps were caught by re-running the corpora, not by the unit tests. Both
+are now pinned by regression tests.
 
 ---
 

@@ -127,6 +127,26 @@ class OuterWrite:
     is_global: bool = False
     #: Helper functions traversed to reach this write, outermost first.
     via: tuple[str, ...] = ()
+    #: Identity of the step body containing the write, for the read-back check.
+    step_id: int | None = None
+
+
+@dataclass
+class Read:
+    """A name being read, and where from.
+
+    RG003 needs this to tell a lost update from a harmless one. A value written
+    in a step body and never read anywhere else cannot corrupt anything when the
+    write is skipped on replay; one that is read elsewhere can.
+    """
+
+    name: str
+    loc: Location
+    region: Region
+    #: Identity of the enclosing step body, or None in the durable region. Two
+    #: different step bodies are "elsewhere" from each other: neither re-runs on
+    #: replay, so a value written in one and read in another is still stale.
+    step_id: int | None = None
 
 
 @dataclass
@@ -158,6 +178,9 @@ class Handler:
     calls: list[Call] = field(default_factory=list)
     branches: list[Branch] = field(default_factory=list)
     outer_writes: list[OuterWrite] = field(default_factory=list)
+    #: Every name read, with its region. Consumed only by RG003's read-back
+    #: check; cheap to collect and it keeps the rule out of the frontends.
+    reads: list[Read] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
     #: Regions the frontend could not resolve, surfaced so coverage is honest
     #: rather than silently partial.

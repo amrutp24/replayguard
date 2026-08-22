@@ -37,6 +37,7 @@ from ..ir import (
     Location,
     Module,
     OuterWrite,
+    Read,
     Region,
     Step,
 )
@@ -257,6 +258,11 @@ class _Walker:
         self.ctx = ctx
         self.h = handler
         self.scopes: list[set[str]] = []
+        #: Identity of the step body being walked, None in the durable region.
+        #: RG003 compares it against a read's step id to tell a lost update from
+        #: a write that nothing ever consumes.
+        self.current_step_id: int | None = None
+        self._step_counter = 0
         #: Locals whose declared type is tainted, layered over class fields.
         self.local_tainted: dict[str, object] = {}
         self.local_aws: set[str] = set()
@@ -370,6 +376,7 @@ class _Walker:
                         region=region,
                         is_global=self._is_field(root),
                         via=self.via,
+                        step_id=self.current_step_id,
                     )
                 )
         for child in node.children:
@@ -393,6 +400,43 @@ class _Walker:
             self.visit(child, region)
 
     # -- calls ------------------------------------------------------------
+
+    def _is_mutation_receiver(self, node) -> bool:
+        """Is this identifier the receiver of an in-place mutation?
+
+        `list.add(x)` writes to `list`; it does not consume it. Recording the
+        receiver as a read made a write-only instrument look like a cross-step
+        read, so RG003's read-back check never suppressed it.
+        """
+        parent = node.parent
+        if parent is None or parent.type != "method_invocation":
+            return False
+        # Compare node ids, not object identity: tree-sitter builds a fresh
+        # Python wrapper on every access, so `is` is always False here.
+        receiver = parent.child_by_field_name("object")
+        if receiver is None or receiver.id != node.id:
+            return False
+        name = parent.child_by_field_name("name")
+        if name is None or self.src.text(name) not in _MUTATORS:
+            return False
+        # Exclude only when the result is discarded. `log.push(x);` as a
+        # statement is a pure write. But `for (const s of items.reverse())`
+        # consumes the returned array -- it is a mutation *and* a read, and
+        # treating it as write-only suppressed the saga finding this tool exists
+        # to catch.
+        return parent.parent is not None and parent.parent.type == "expression_statement"
+
+    def _v_identifier(self, node, region: Region) -> None:
+        if self._is_mutation_receiver(node):
+            return
+        self.h.reads.append(
+            Read(
+                name=self.src.text(node),
+                loc=self.src.loc(node),
+                region=region,
+                step_id=self.current_step_id,
+            )
+        )
 
     def _v_method_invocation(self, node, region: Region) -> None:
         if self._try_durable_operation(node, region):
@@ -524,6 +568,7 @@ class _Walker:
                     region=Region.STEP_BODY,
                     is_global=is_global,
                     via=self.via,
+                    step_id=self.current_step_id,
                 )
             )
 
@@ -568,6 +613,7 @@ class _Walker:
                     region=region,
                     is_global=self._is_field(root),
                     via=self.via,
+                    step_id=self.current_step_id,
                 )
             )
 
