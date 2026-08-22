@@ -327,6 +327,19 @@ class _Walker:
             self._bind_targets(t)
         self.visit(node.value, region)
 
+    def _v_AnnAssign(self, node: ast.AnnAssign, region: Region) -> None:
+        """`x: str = f()` binds `x` just as `x = f()` does.
+
+        Handling only ast.Assign left annotated names unbound, so they looked
+        like module-level functions to the unresolved-callable heuristic and to
+        the outer-write scope check. Typed assignment is idiomatic in exactly the
+        SDK-heavy code this tool targets.
+        """
+        if node.value is not None:
+            self._record_target_write(node.target, region)
+            self.visit(node.value, region)
+        self._bind_targets(node.target)
+
     def _v_AugAssign(self, node: ast.AugAssign, region: Region) -> None:
         # `x += 1` mutates, so an outer `x` is a write even without a subscript.
         self._record_target_write(node.target, region, augmented=True)
@@ -571,15 +584,25 @@ class _Walker:
         record it as an ordinary call.
         """
         func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr not in _STEP_METHODS:
+        if isinstance(func, ast.Name):
+            # Some SDKs expose operations as module-level functions rather than
+            # context methods: `from async_durable_execution import step` then
+            # `await step(fn, name="x")`. Requiring a context receiver left every
+            # step boundary in those files unrecognised, so the whole handler
+            # read as durable region. Import provenance is what makes this safe
+            # -- `step` is far too common a name to match unqualified.
+            canonical = self.ctx.aliases.get(func.id, "")
+            if func.id not in _STEP_METHODS or "durable" not in canonical:
+                return False
+        elif not isinstance(func, ast.Attribute) or func.attr not in _STEP_METHODS:
             return False
-        if not (isinstance(func.value, ast.Name) and _is_context_name(func.value.id)):
+        elif not (isinstance(func.value, ast.Name) and _is_context_name(func.value.id)):
             return False
 
         name_literal, name_is_static, name_symbols = self._step_name(node)
         self.h.steps.append(
             Step(
-                kind=func.attr,
+                kind=func.id if isinstance(func, ast.Name) else func.attr,
                 loc=_loc(self.path, node),
                 name_literal=name_literal,
                 name_is_static=name_is_static,
@@ -676,9 +699,12 @@ def _collect_nested(handler_node: ast.AST) -> tuple[dict[str, ast.AST], set[str]
         if not isinstance(node, ast.Call):
             continue
         f = node.func
-        if not (isinstance(f, ast.Attribute) and f.attr in _STEP_METHODS):
+        if isinstance(f, ast.Name):
+            if f.id not in _STEP_METHODS:
+                continue
+        elif not (isinstance(f, ast.Attribute) and f.attr in _STEP_METHODS):
             continue
-        if not (isinstance(f.value, ast.Name) and _is_context_name(f.value.id)):
+        elif not (isinstance(f.value, ast.Name) and _is_context_name(f.value.id)):
             continue
         for arg in [*node.args, *(kw.value for kw in node.keywords if kw.arg != "name")]:
             if isinstance(arg, ast.Name) and arg.id in nested:

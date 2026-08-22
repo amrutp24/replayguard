@@ -62,10 +62,46 @@ test asserting the bug manifests.
 true positives -- the saga, and two `resizeAttempts` counters -- with no known
 false positives remaining after the read-back check.
 
-**Unproven.** RG002, RG004, RG005 have **never produced a true positive on code
-written by someone else.** They pass unit tests and fire correctly on constructed
-input. That is not the same thing. RG002 has never fired at all across 1,440
-files, so it is entirely untested in the wild.
+**Unproven, and probably for a good reason.** RG002, RG004 and RG005 have never
+produced a true positive on code written by someone else. A deliberate hunt for
+evidence (2026-08-19) concluded that **the silence is correct, not broken** --
+see below.
+
+---
+
+## Why RG002, RG004 and RG005 never fire
+
+A dedicated hunt, because three silent rules could mean either "the code is
+clean" or "the rules are broken". The two have very different consequences and
+the distinction was worth establishing rather than assuming.
+
+**The durable regions were inspected directly** across all 837 handlers, not
+just the findings:
+
+| Evidence | Result |
+|---|---|
+| Branch conditions in durable regions | **85 found.** Every one tests stable data -- `isinstance`, `Array.isArray`, `len`, checkpointed step results (`result.failed`, `decision.shouldRetry`), or event fields. **Not one tests a clock or a random source.** |
+| Non-literal operation names | **38 found.** Every one derives from stable data -- `tx.id`, `event.id`, `specialist.name`, a loop index. **Not one from a clock.** |
+| Calls in durable regions | Dominated by durable operations, logging, and pure helpers. **No I/O.** |
+
+So published durable-function code puts its I/O inside steps, branches on
+checkpointed data, and names operations stably. The three rules guard against
+mistakes competent authors do not make in example code they publish.
+
+**The rules do fire.** A positive control -- a realistic handler containing an
+audit write outside a step, a branch on `new Date()`, and an operation named
+``ship-${Date.now()}`` -- produces RG002, RG004 and RG005 correctly. That is
+synthetic and is **not** evidence; it only separates "nothing to find" from
+"broken".
+
+**What this means.** These rules are unproven on real code and likely to stay
+that way against public examples. If they matter, the evidence will come from
+production code written under deadline, which is not accessible here. Do not
+describe them as validated.
+
+**The hunt also found two real bugs**, listed below: annotated assignments not
+binding names, and module-level durable operations going unrecognised -- which
+had left 488 files effectively unanalysed.
 
 ---
 
@@ -158,7 +194,18 @@ the fixtures and the frontends.
 10. **`n++` was not recognised as a mutation** — tree-sitter gives it
     `update_expression`; only assignment forms were handled. This hid a genuine
     RG003 in the same file that produced four false positives.
-11. **`parallel([...])` is an unnamed overload** — argument 0 is an array of
+11. **Annotated assignments did not bind names.** `result: str = await invoke(...)`
+    is `ast.AnnAssign`, and only `ast.Assign` was handled, so annotated names
+    looked unbound to both the unresolved-callable heuristic and the outer-write
+    scope check. Typed assignment is idiomatic in exactly the SDK-heavy code
+    this tool targets.
+12. **Module-level durable operations were unrecognised.** Some SDKs expose
+    `step`/`invoke`/`wait` as imported functions rather than context methods
+    (`from async_durable_execution import step`). Requiring a context receiver
+    left every step boundary in those files unrecognised, so whole handlers read
+    as durable region -- 488 of the 685 community files. Now matched, guarded by
+    import provenance since `step` is far too common a name to match bare.
+13. **`parallel([...])` is an unnamed overload** — argument 0 is an array of
     branch bodies, not a name. Binding it as the name made RG005 report a span
     covering 200 lines, against the file whose author had most carefully avoided
     exactly that hazard.
