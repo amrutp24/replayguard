@@ -67,6 +67,26 @@ tests/fixtures/python/bad_handler.py
     71:17  note    RG900  could not resolve whether this code runs inside a step
 ```
 
+## Developing
+
+One command verifies everything locally:
+
+```bash
+python scripts/verify.py
+```
+
+It runs five gates — import, lint, tests with a coverage floor, the CLI's exit
+codes and every output format, and a canary asserting the known-good fixtures
+produce **zero** findings. Exit code is 0 only if all five pass.
+
+The canary is the one that matters. A linter that fires on correct code gets
+uninstalled, after which it catches nothing, so a false positive is a worse
+failure than a missed bug and gets its own gate.
+
+```bash
+pip install -e ".[dev]"
+```
+
 ## Rules
 
 | ID | What it catches | Why it breaks replay |

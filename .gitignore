@@ -8,3 +8,7 @@ build/
 .venv/
 venv/
 *.sarif
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

@@ -83,7 +83,8 @@ _LAMBDA_NODES = {"lambda_expression", "method_reference"}
 def _load_parser():
     try:
         import tree_sitter_java as tsj
-        from tree_sitter import Language as TSLanguage, Parser
+        from tree_sitter import Language as TSLanguage
+        from tree_sitter import Parser
     except ImportError as exc:  # pragma: no cover - depends on install extras
         raise RuntimeError(
             "Java support needs the optional dependencies: "

@@ -63,7 +63,7 @@ def discover_role(session):
                 if "lambda.amazonaws.com" in doc:
                     candidates.append((role["CreateDate"], role["Arn"]))
     except ClientError as exc:
-        print("  ! cannot list roles (%s)" % exc.response["Error"]["Code"])
+        print(f"  ! cannot list roles ({exc.response['Error']['Code']})")
         return None
     if not candidates:
         return None
@@ -93,7 +93,7 @@ def attempt(client, name, runtime, role, durable):
         return "ACCEPTED", resp.get("FunctionArn", "")
     except ClientError as exc:
         err = exc.response["Error"]
-        return "REJECTED[%s]" % err["Code"], err.get("Message", "")[:400]
+        return f"REJECTED[{err['Code']}]", err.get("Message", "")[:400]
     except Exception as exc:
         # Parameter validation happens client-side and raises a plain exception.
         return "REJECTED[ClientSideValidation]", str(exc)[:400]
@@ -103,10 +103,10 @@ def cleanup(client, names):
     for n in names:
         try:
             client.delete_function(FunctionName=n)
-            print("  deleted %s" % n)
+            print(f"  deleted {n}")
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ResourceNotFoundException":
-                print("  ! could not delete %s: %s" % (n, exc.response["Error"]["Code"]))
+                print(f"  ! could not delete {n}: {exc.response['Error']['Code']}")
 
 
 def main():
@@ -124,11 +124,11 @@ def main():
     try:
         ident = session.client("sts").get_caller_identity()
     except Exception as exc:
-        print("No usable credentials: %s" % exc, file=sys.stderr)
+        print(f"No usable credentials: {exc}", file=sys.stderr)
         return 2
 
     client = session.client("lambda")
-    print("account %s  region %s" % (ident["Account"], region))
+    print(f"account {ident['Account']}  region {region}")
 
     members = client.meta.service_model.operation_model("CreateFunction").input_shape.members
     if "DurableConfig" not in members:
@@ -141,7 +141,7 @@ def main():
         print("\nNo Lambda-assumable IAM role found, and ROLE_ARN is not set.")
         print("Create one, or pass ROLE_ARN=arn:aws:iam::<acct>:role/<name>.")
         return 2
-    print("role    %s\n" % role)
+    print(f"role    {role}\n")
 
     cells = [
         ("A", PREFIX + "-managed-durable", "python3.13", True,
@@ -155,12 +155,12 @@ def main():
     created = []
     results = {}
     for cell, name, runtime, durable, why in cells:
-        print("[%s] %-16s durable=%-5s  %s" % (cell, runtime, durable, why))
+        print(f"[{cell}] {runtime:<16} durable={str(durable):<5}  {why}")
         verdict, detail = attempt(client, name, runtime, role, durable)
         results[cell] = verdict
-        print("     -> %s" % verdict)
+        print(f"     -> {verdict}")
         if detail and not verdict.startswith("ACCEPTED"):
-            print("        %s" % detail)
+            print(f"        {detail}")
         if verdict.startswith("ACCEPTED"):
             created.append(name)
         print()
@@ -192,7 +192,7 @@ def main():
         print("\ncleanup:")
         cleanup(client, created)
     elif created:
-        print("\nkept: %s  (delete them when done)" % ", ".join(created))
+        print(f"\nkept: {', '.join(created)}  (delete them when done)")
     return 0
 
 
