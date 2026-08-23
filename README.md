@@ -118,7 +118,8 @@ Read it before relying on a clean run.
 | Python | ✅ | stdlib `ast` |
 | TypeScript / JavaScript | ✅ | tree-sitter |
 | Java | ✅ | tree-sitter |
-| Rust, Go, .NET | ❌ Out of scope | No official SDK. Go and .NET have community PoCs; Rust has none. |
+| Rust | ⬜ Candidate | No *official* SDK, but [pgdad/durable-rust](https://github.com/pgdad/durable-rust) is a complete community one whose own docs say determinism rules are documented, not enforced. That is this tool's gap to fill. |
+| Go, .NET | ❌ Out of scope | Community proofs of concept only. |
 
 The three SDKs don't just differ in syntax — they differ in shape:
 

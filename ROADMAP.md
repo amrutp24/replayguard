@@ -41,7 +41,7 @@ others not to bother.
 Static checker across all three runtimes with an official AWS SDK. Shared IR, 6
 rules, CLI with text/JSON/SARIF, 38 tests, validated against one real handler.
 
-Runtime coverage is *finished*, not partial: Rust has no SDK, Go and .NET have
+Runtime coverage is finished for the *official* SDKs. Go and .NET have
 only community proofs of concept.
 
 ---
@@ -307,9 +307,35 @@ resume, and replay-against-state all work on a custom runtime.
   checkpoint. No Rust toolchain was needed to answer a question about Rust.
 
 **Nothing about a Rust durable SDK is now unknown.** The control plane is
-public, the payload contract is confirmed, the response contract is confirmed,
-and the full lifecycle has been exercised end to end from a custom runtime. What
-remains is writing it.
+public, both payload contracts are confirmed, and the full lifecycle has been
+exercised end to end from a custom runtime.
+
+### Correction, 2026-08-22: someone already wrote it
+
+A crates.io check before starting found **[pgdad/durable-rust](https://github.com/pgdad/durable-rust)**
+-- `durable-lambda-core` and four sibling crates, v1.2.0, published March 2026.
+245 commits, four API styles, 47 examples, 28 end-to-end tests, a Python-Rust
+compliance suite, and it already targets `provided.al2023`. It claims feature
+parity with the official Python SDK.
+
+**Earlier statements in this repo that Rust "has no SDK at all" were wrong and
+have been corrected.** They came from a GitHub search that missed it plus the
+true observation that AWS ships none; a crates.io search would have found it
+immediately. The probes were still worth running -- they establish the platform
+facts independently, and they were what prompted the check that caught the
+error.
+
+**What is still open.** That SDK's own documentation says the determinism rules
+are *documented, not enforced*: violations produce runtime errors or wrong
+replay behaviour, not compile errors. Its step closures are `Send + 'static`,
+which does prevent capturing borrowed references, but `Utc::now()`,
+`Uuid::new_v4()` and `rand::random()` outside a step remain the developer's
+problem.
+
+That is precisely the gap replayguard exists to fill in the other three
+languages. **A Rust frontend for replayguard is therefore the sensible move, not
+a competing SDK** -- it extends a proven tool to an ecosystem whose SDK author
+has already said the rules are unenforced.
 
 ---
 
