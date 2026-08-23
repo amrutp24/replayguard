@@ -276,10 +276,40 @@ specified `OperationUpdate` wire format, a payload contract confirmed
 empirically, and a language-neutral conformance suite with an extension API to
 validate the result against.
 
-**Still unproven:** a full suspend/resume cycle. This probe completed with
-`SUCCEEDED`; nothing has yet returned `PENDING`, been resumed, and replayed
-against its checkpoints from a custom runtime. That is the next experiment, and
-it is now a question of building rather than of permission.
+### The full suspend/resume cycle works - proven 2026-08-22
+
+`experiments/durable_suspend_resume_probe.py` closes the last gap. A
+`provided.al2023` function checkpointed a WAIT operation, returned `PENDING`,
+and the platform re-invoked it after the timer fired **with that operation in
+its state**:
+
+| | Operations in state | Updated |
+|---|---|---|
+| invoke 1 | `dd105579...` (execution) | `dd105579...` |
+| invoke 2 | `dd105579...`, **`rg-wait-1`** | **`rg-wait-1`** |
+
+Final execution status `SUCCEEDED`, result `"resumed"`. Suspend, checkpoint,
+resume, and replay-against-state all work on a custom runtime.
+
+**Three things this cost, worth knowing before repeating it:**
+
+* Lambda rejects `{"Status": "PENDING"}` when nothing is outstanding --
+  *"Cannot return PENDING status with no pending operations."* The operation has
+  to be checkpointed **before** suspending, so checkpointing from outside
+  afterwards cannot work; the token is spent by then.
+* The execution role needs `AWSLambdaBasicDurableExecutionRolePolicy`.
+  `AWSLambdaBasicExecutionRole` alone produces *"not authorized to perform:
+  lambda:CheckpointDurableExecution"* -- which is Rule 3 of
+  [SWA-001](../serverless/docs/standards/SWA-001-durable-function-module-design.md),
+  encountered live rather than read.
+* `provided.al2023` ships curl 8.17 with `--aws-sigv4`, and Lambda injects
+  credentials as environment variables, so a shell bootstrap can sign its own
+  checkpoint. No Rust toolchain was needed to answer a question about Rust.
+
+**Nothing about a Rust durable SDK is now unknown.** The control plane is
+public, the payload contract is confirmed, the response contract is confirmed,
+and the full lifecycle has been exercised end to end from a custom runtime. What
+remains is writing it.
 
 ---
 
