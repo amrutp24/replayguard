@@ -215,7 +215,6 @@ def _is_context_type(name: str) -> bool:
 class _ModuleContext:
     def __init__(self, src: _Src, root):
         #: `use` aliases, so `chrono::Utc` resolves when written bare.
-        #: `use` aliases, so `chrono::Utc` resolves when written bare.
         self.aliases: dict[str, str] = {}
         self.statics: set[str] = set()
         for use in _descend(root, {"use_declaration"}):
