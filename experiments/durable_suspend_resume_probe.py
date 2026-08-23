@@ -101,9 +101,13 @@ while true; do
       TOK="$(printf '%s' "$EVENT" | sed -n 's/.*"CheckpointToken":"\([^"]*\)".*/\1/p')"
       AENC="$(printf '%s' "$ARN" | sed -e 's/:/%3A/g' -e 's|/|%2F|g')"
       CPB='{"CheckpointToken":"'"$TOK"'","Updates":[{"Id":"__OPID__","Type":"WAIT","Action":"START","Name":"resume-trigger","WaitOptions":{"WaitSeconds":__SECS__}}]}'
-      OUT="$(curl -sS -X POST \
+      # Credentials go in through a config file on stdin rather than on the
+      # command line. argv is readable via /proc; a Lambda sandbox is
+      # single-tenant so the real risk here is slight, but this is example code
+      # and secrets-on-argv is a bad habit to hand to anyone who copies it.
+      OUT="$(printf 'user = "%s:%s"\n' "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" \
+        | curl -sS -X POST -K - \
         --aws-sigv4 "aws:amz:$REGION:lambda" \
-        --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
         -H "x-amz-security-token: ${AWS_SESSION_TOKEN:-}" \
         -H "content-type: application/json" \
         -d "$CPB" \

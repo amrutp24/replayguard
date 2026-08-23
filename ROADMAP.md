@@ -249,7 +249,7 @@ custom runtime received:
 ```json
 {"DurableExecutionArn": "arn:aws:lambda:us-east-1:...:function:durable-invoke-probe:4
     /durable-execution/03229992-89d5-416f-b2a2-bb60b7dbdba5/c13a0886-...",
- "CheckpointToken": "<redacted>-kms..."}
+ "CheckpointToken": "<redacted; a KMS-encrypted, single-use token>"}
 ```
 
 **Both fields arrive. The gate was not cosmetic.**
