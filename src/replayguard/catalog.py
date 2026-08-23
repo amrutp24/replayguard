@@ -196,10 +196,52 @@ JAVA_TAINTED_TYPES: dict[str, Category] = {
 }
 
 
+_RUST: dict[str, Category] = {
+    # clock -- stored without the crate prefix; the frontend canonicalises
+    # `chrono::Utc::now` down to `Utc::now` before lookup.
+    "SystemTime::now": Category.CLOCK,
+    "Instant::now": Category.CLOCK,
+    "Utc::now": Category.CLOCK,
+    "Local::now": Category.CLOCK,
+    "OffsetDateTime::now_utc": Category.CLOCK,
+    "OffsetDateTime::now_local": Category.CLOCK,
+    "Date::today": Category.CLOCK,
+    # random
+    "rand::random": Category.RANDOM,
+    "rand::thread_rng": Category.RANDOM,
+    "rand::rng": Category.RANDOM,
+    "thread_rng::gen": Category.RANDOM,
+    "OsRng::next_u64": Category.RANDOM,
+    "fastrand::u64": Category.RANDOM,
+    "fastrand::f64": Category.RANDOM,
+    # identity
+    "Uuid::new_v4": Category.IDENTITY,
+    "Uuid::now_v7": Category.IDENTITY,
+    "Ulid::new": Category.IDENTITY,
+    # network
+    "reqwest::get": Category.NETWORK,
+    "Client::get": Category.NETWORK,
+    "Client::post": Category.NETWORK,
+    "ureq::get": Category.NETWORK,
+    "TcpStream::connect": Category.NETWORK,
+    # filesystem
+    "fs::read": Category.FILESYSTEM,
+    "fs::read_to_string": Category.FILESYSTEM,
+    "fs::write": Category.FILESYSTEM,
+    "fs::remove_file": Category.FILESYSTEM,
+    "File::open": Category.FILESYSTEM,
+    "File::create": Category.FILESYSTEM,
+    # process
+    "process::id": Category.PROCESS,
+    "thread::current": Category.PROCESS,
+}
+
+
 _BY_LANGUAGE: dict[Language, dict[str, Category]] = {
     Language.PYTHON: _PYTHON,
     Language.TYPESCRIPT: _TYPESCRIPT,
     Language.JAVA: _JAVA,
+    Language.RUST: _RUST,
 }
 
 
@@ -219,6 +261,10 @@ def is_aws_sdk_call(language: Language, dotted: str) -> bool:
         return dotted.startswith(("boto3.", "botocore."))
     if language is Language.JAVA:
         return dotted.startswith("software.amazon.awssdk")
+    if language is Language.RUST:
+        # The Rust AWS SDK is used as `client.operation().send().await`, so the
+        # send is the reliable marker; operation names are unbounded.
+        return dotted.startswith("aws_sdk_") or dotted.endswith(".send")
     return dotted.startswith("@aws-sdk/") or dotted.endswith(".send")
 
 

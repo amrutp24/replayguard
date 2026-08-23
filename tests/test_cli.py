@@ -92,11 +92,11 @@ def test_min_confidence_filters(capsys):
 # -- discovery ---------------------------------------------------------------
 
 
-def test_all_three_languages_are_discovered(capsys):
+def test_all_languages_are_discovered(capsys):
     main(["check", str(FIXTURES), "--format", "json"])
     files = {f["file"] for f in json.loads(capsys.readouterr().out)["findings"]}
     suffixes = {Path(f).suffix for f in files}
-    assert suffixes == {".py", ".ts", ".java"}
+    assert suffixes == {".py", ".ts", ".java", ".rs"}
 
 
 def test_vendor_directories_are_skipped(tmp_path, capsys):

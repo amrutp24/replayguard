@@ -16,6 +16,7 @@ run that was performed, not from an estimate.
 |---|---:|---:|---:|---|
 | AWS samples + all three official SDKs | 5 | 755 | 415 | AWS |
 | Community | 11 | 685 | 422 | ~10 independent |
+| `pgdad/durable-rust` (Rust SDK) | 1 | 107 | 105 | 1 |
 | **Total** | **16** | **1,440** | **837** | |
 
 Community repos: `singledigit/durable-serverlesspresso`,
@@ -44,6 +45,10 @@ covered, and that is where every real bug in this tool was found.
 | RG004 nondeterministic branch | 0 | 0 | **never fired** | none known |
 | RG005 unstable operation name | 0 | 0 | **never fired** | none known |
 | RG900 coverage gap (note) | 32 | 19 | n/a | n/a |
+
+**Rust corpus: 105 handlers, 134 operations, zero findings.** The SDK authors'
+own code is deterministic, which is what one would hope -- and it is a
+false-positive check on a fourth language at the same time.
 
 **RG003 now has a read-back reachability check** (added 2026-08-19): a write in a
 step body is only reported when the value is read somewhere the write may not

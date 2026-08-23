@@ -118,8 +118,12 @@ Read it before relying on a clean run.
 | Python | ✅ | stdlib `ast` |
 | TypeScript / JavaScript | ✅ | tree-sitter |
 | Java | ✅ | tree-sitter |
-| Rust | ⬜ Candidate | No *official* SDK, but [pgdad/durable-rust](https://github.com/pgdad/durable-rust) is a complete community one whose own docs say determinism rules are documented, not enforced. That is this tool's gap to fill. |
+| Rust | ✅ | tree-sitter |
 | Go, .NET | ❌ Out of scope | Community proofs of concept only. |
+
+Rust has no *official* AWS SDK; the frontend targets
+[pgdad/durable-rust](https://github.com/pgdad/durable-rust), whose own docs say
+its determinism rules are documented, not enforced. That is exactly this tool's job.
 
 The three SDKs don't just differ in syntax — they differ in shape:
 
@@ -128,6 +132,7 @@ The three SDKs don't just differ in syntax — they differ in shape:
 | Python | `@durable_execution` | `context.step(fn, name="x")` |
 | JS/TS | `withDurableExecution(fn)` | `context.step("x", fn)` |
 | Java | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)` |
+| Rust | param typed `*Context` | `ctx.step("x", \|\| async { .. })` |
 
 The callback is first, second, and third respectively — and Java also has a
 two-argument overload, so its body is located by *kind* rather than by position.
@@ -144,8 +149,13 @@ show up:
 - **Java** — captured locals must be effectively final, so reassigning one is a
   *compile error* and that violation class cannot exist. What remains is
   collection mutation and instance/static field writes.
+- **Rust** — the narrowest of the four. Step closures are `Send + 'static`, so
+  capturing a borrowed reference does not compile at all; the borrow checker
+  rejects the JavaScript shape outright. What is left is interior mutability
+  through a shared handle — an `Arc<Mutex<_>>` locked and pushed to, or a
+  `static mut`.
 
-Three languages, three outer-write models, one rule.
+Four languages, four outer-write models, one rule.
 
 ## Design
 

@@ -18,7 +18,11 @@ from replayguard.ir import Call, Handler, Language, Location, Region
 
 pytest.importorskip("tree_sitter", reason="parsers not installed")
 
-from replayguard.frontends import java_frontend, typescript_frontend  # noqa: E402
+from replayguard.frontends import (  # noqa: E402
+    java_frontend,
+    rust_frontend,
+    typescript_frontend,
+)
 
 # -- model -------------------------------------------------------------------
 
@@ -148,6 +152,7 @@ _EMPTY = {
     Language.PYTHON: ("empty.py", ""),
     Language.TYPESCRIPT: ("empty.ts", ""),
     Language.JAVA: ("Empty.java", ""),
+    Language.RUST: ("empty.rs", ""),
 }
 
 _NO_HANDLER = {
@@ -157,12 +162,17 @@ _NO_HANDLER = {
         "Plain.java",
         "public class Plain { public long f() { return System.currentTimeMillis(); } }\n",
     ),
+    Language.RUST: (
+        "plain.rs",
+        "use chrono::Utc;\nfn f() -> i64 { Utc::now().timestamp() }\n",
+    ),
 }
 
 _PARSERS = {
     Language.PYTHON: python_frontend.parse_source,
     Language.TYPESCRIPT: typescript_frontend.parse_source,
     Language.JAVA: java_frontend.parse_source,
+    Language.RUST: rust_frontend.parse_source,
 }
 
 

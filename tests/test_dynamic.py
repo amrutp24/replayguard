@@ -96,9 +96,12 @@ def _clock_named_step(event, context: DurableContext):
 
 @durable_execution
 def _clock_branch(event, context: DurableContext):
-    if datetime.datetime.now().hour < 12:
-        return context.step(lambda _: "am", name="morning")
-    return context.step(lambda _: "pm", name="afternoon")
+    # Parity, not `< 12`. The perturbation shifts the clock by an odd number of
+    # hours, so parity always flips; a noon boundary is only crossed for some
+    # starting times, which made this test pass or fail depending on when it ran.
+    if datetime.datetime.now().hour % 2 == 0:
+        return context.step(lambda _: "even", name="even-hour")
+    return context.step(lambda _: "odd", name="odd-hour")
 
 
 @durable_execution

@@ -35,6 +35,7 @@ GOOD_FIXTURES = [
     FIXTURES / "python" / "good_handler.py",
     FIXTURES / "typescript" / "good_handler.ts",
     FIXTURES / "java" / "GoodHandler.java",
+    FIXTURES / "rust" / "good_handler.rs",
 ]
 
 GREEN, RED, DIM, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[0m"

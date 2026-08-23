@@ -26,6 +26,7 @@ class Language(str, Enum):
     PYTHON = "python"
     TYPESCRIPT = "typescript"
     JAVA = "java"
+    RUST = "rust"
 
 
 class Region(str, Enum):

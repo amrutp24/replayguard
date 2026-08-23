@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 typescript = ["tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
 java = ["tree-sitter>=0.25", "tree-sitter-java>=0.23"]
+rust = ["tree-sitter>=0.25", "tree-sitter-rust>=0.23"]
 dynamic = [
     "aws-durable-execution-sdk-python>=1.7",
     "aws-durable-execution-sdk-python-testing>=1.2",
@@ -20,6 +21,7 @@ all = [
     "tree-sitter>=0.25",
     "tree-sitter-typescript>=0.23",
     "tree-sitter-java>=0.23",
+    "tree-sitter-rust>=0.23",
     "aws-durable-execution-sdk-python>=1.7",
     "aws-durable-execution-sdk-python-testing>=1.2",
 ]
@@ -28,6 +30,7 @@ dev = [
     "tree-sitter>=0.25",
     "tree-sitter-typescript>=0.23",
     "tree-sitter-java>=0.23",
+    "tree-sitter-rust>=0.23",
     "aws-durable-execution-sdk-python>=1.7",
     "aws-durable-execution-sdk-python-testing>=1.2",
 ]
