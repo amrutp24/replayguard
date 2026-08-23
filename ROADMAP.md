@@ -240,11 +240,46 @@ The original conditional is therefore resolved this way:
   step boundaries. No durable SDK in any ecosystem does this, and Python and JS
   structurally cannot — which is precisely why they need replayguard.
 
-**Next step, before any SDK work:** prove the invoke/suspend path on
-`provided.al2023`. A minimal Rust function that fetches durable state,
-checkpoints one step, suspends, and resumes. If that works, the SDK is an
-engineering project rather than a research question. If it does not, the gate
-was cosmetic and this milestone closes.
+### The invoke path works too — confirmed 2026-08-22
+
+`experiments/durable_invoke_probe.py` deployed a `provided.al2023` function with
+`DurableConfig`, invoked it, and had it echo back whatever it was handed. The
+custom runtime received:
+
+```json
+{"DurableExecutionArn": "arn:aws:lambda:us-east-1:...:function:durable-invoke-probe:4
+    /durable-execution/03229992-89d5-416f-b2a2-bb60b7dbdba5/c13a0886-...",
+ "CheckpointToken": "<redacted>-kms..."}
+```
+
+**Both fields arrive. The gate was not cosmetic.**
+
+Two supporting observations:
+
+* An earlier attempt returned `{"probe":"ok"}` and Lambda rejected it with
+  `Invalid Status in invocation output`. That error comes from the *durable
+  layer*, which proves the durable machinery is engaged on a custom runtime
+  rather than bypassed.
+* The protocol needs no privileged runtime hook. It is plain JSON in the invoke
+  body and plain AWS API calls out:
+
+  | | Shape |
+  |---|---|
+  | in | `{DurableExecutionArn, CheckpointToken, InitialExecutionState, UpdatedOperationIds}` |
+  | out | `{Status: SUCCEEDED \| FAILED \| PENDING \| RETRY, Result?, Error?}` |
+
+  `PENDING` is how a handler suspends.
+
+**A Rust durable SDK is therefore an engineering project, not a research
+question.** Everything it needs is public: nine documented control-plane APIs, a
+specified `OperationUpdate` wire format, a payload contract confirmed
+empirically, and a language-neutral conformance suite with an extension API to
+validate the result against.
+
+**Still unproven:** a full suspend/resume cycle. This probe completed with
+`SUCCEEDED`; nothing has yet returned `PENDING`, been resumed, and replayed
+against its checkpoints from a custom runtime. That is the next experiment, and
+it is now a question of building rather than of permission.
 
 ---
 
