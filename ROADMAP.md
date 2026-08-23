@@ -206,21 +206,45 @@ what a talk or a post would be built on.
 
 ---
 
-## M5 — Conditional: the Rust SDK
+## M5 — Conditional: the Rust SDK  *(gate cleared 2026-08-22)*
 
-**Gated entirely on one experiment.** `experiments/durable_runtime_probe.py` is
-written and ready; it needs AWS credentials and has never been run.
+**The gate is cleared.** `experiments/durable_runtime_probe.py` was run on
+2026-08-22 against a real account (us-east-1). All three cells came back
+ACCEPTED:
 
-- **Accepted** → a Rust durable SDK is buildable, and the strongest idea from
-  this whole line of work opens up: an SDK where nondeterminism is a **compile
-  error** rather than a lint. Ownership of the durable context, borrow-checker
-  enforcement of step boundaries. No durable SDK in any ecosystem does this, and
-  Python and JS structurally cannot — which is precisely why they need
-  replayguard.
-- **Rejected** → blocked on AWS, not on effort. Revisit if AWS opens the gate.
+```
+[A] python3.13       + DurableConfig  -> ACCEPTED   durable execution available here
+[B] provided.al2023  + DurableConfig  -> ACCEPTED   THE QUESTION
+[C] provided.al2023  no DurableConfig -> ACCEPTED   custom runtimes work
+```
 
-Ten minutes to settle. Worth running early even though the milestone is last,
-because a positive result may reorder everything after M2.
+**Lambda does not gate `DurableConfig` to managed runtimes.** All three
+functions were deleted afterwards and the account verified clean.
+
+**What that establishes, precisely:** function *creation* is not gated. Combined
+with the nine public durable-execution APIs, the fully specified
+`OperationUpdate` wire format, and AWS's language-neutral conformance suite with
+its extension API, the control-plane path to a Rust SDK is open.
+
+**What it does not establish:** that the invoke/suspend path works. Lambda
+accepting the configuration is not the same as a `provided.al2023` runtime
+receiving durable execution context at invoke time, checkpointing through
+`CheckpointDurableExecution`, and resuming. That is the next experiment, and it
+needs a real Rust function rather than a config call.
+
+The original conditional is therefore resolved this way:
+
+- **Accepted (this is what happened)** → the strongest idea from this whole line
+  of work is open: an SDK where nondeterminism is a **compile error** rather
+  than a lint. Ownership of the durable context, borrow-checker enforcement of
+  step boundaries. No durable SDK in any ecosystem does this, and Python and JS
+  structurally cannot — which is precisely why they need replayguard.
+
+**Next step, before any SDK work:** prove the invoke/suspend path on
+`provided.al2023`. A minimal Rust function that fetches durable state,
+checkpoints one step, suspends, and resumes. If that works, the SDK is an
+engineering project rather than a research question. If it does not, the gate
+was cosmetic and this milestone closes.
 
 ---
 
