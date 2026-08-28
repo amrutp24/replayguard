@@ -21,6 +21,21 @@ replayguard checks the rule two ways: statically, by analyzing handler source
 in Python, TypeScript, Java, and Rust, and dynamically, by running a handler
 twice under different clocks and diffing what it did.
 
+## Status
+
+v0.1.0. Validated against 1,547 files of durable-function code written by
+other people; [VALIDATION.md](VALIDATION.md) records what that established and
+what it didn't.
+
+Two known gaps. Calls aren't followed across files, so a handler that reaches
+another module for its I/O passes clean. And three of the six rules have
+working detectors but no confirmed real-world finding yet, because published
+example code doesn't contain the mistakes they catch.
+
+Reports from real codebases are the most useful thing anyone can contribute
+right now, in either direction: a finding it caught, or a false positive it
+shouldn't have raised.
+
 ## Install
 
 ```bash
