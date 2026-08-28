@@ -1,32 +1,25 @@
 # replayguard
 
-**A determinism checker for AWS Lambda durable functions.**
+A determinism checker for AWS Lambda durable functions.
 
 Durable functions re-run your handler from the top on every resume. Completed
-steps aren't re-executed — the SDK returns the checkpointed result and the
-handler fast-forwards back to where it suspended.
-
-That only works if the handler takes the same path every time. AWS states the
-obligation plainly:
+steps aren't re-executed; the SDK returns the checkpointed result and the
+handler fast-forwards back to where it suspended. This only works if the
+handler takes the same path every time, and AWS's docs are explicit about
+whose job that is:
 
 > Any code that is not inside a durable operation must be a pure function of the
 > handler inputs and the results of completed operations.
 
-No clocks, no randomness, no I/O, no mutable global state outside a `step()`.
-**AWS ships no tooling to check any of it.** replayguard is that check.
+No clocks, no randomness, no I/O, no writes to shared state outside a `step()`.
+Nothing enforces this. Break the rule and nothing throws, your tests stay
+green, and the bug surfaces whenever the workflow next resumes. An execution
+can suspend for up to 366 days, so that can be months later, in production.
+AWS's docs name double-charging as a possible consequence.
 
-## Why it matters
-
-The failure mode is silent. From AWS's own documentation:
-
-> The first invocation looks correct because the body runs and the write lands.
-> Replay returns the cached result and skips the body, so the outer state stays
-> at its initial value.
-
-Nothing throws. Tests pass. The bug surfaces on resume — which for a workflow
-that can suspend for up to 366 days might be months later, in production, on
-something holding real money. AWS specifically calls out double-charging as a
-consequence.
+replayguard checks the rule two ways: statically, by analyzing handler source
+in Python, TypeScript, Java, and Rust, and dynamically, by running a handler
+twice under different clocks and diffing what it did.
 
 ## Install
 
@@ -34,7 +27,7 @@ consequence.
 pip install replayguard
 ```
 
-TypeScript and Java need a parser:
+TypeScript, Java, and Rust need a parser:
 
 ```bash
 pip install 'replayguard[all]'
@@ -44,18 +37,12 @@ pip install 'replayguard[all]'
 
 ```bash
 replayguard check src/
-```
-
-```bash
 replayguard check src/ --explain
-```
-
-```bash
 replayguard check src/ --format sarif -o replayguard.sarif
 ```
 
-Exits non-zero when anything at or above `--fail-on` (default `error`) is found,
-so it gates a build without extra wiring.
+Exits non-zero when anything at or above `--fail-on` (default `error`) is
+found, so it can gate a build without extra wiring.
 
 ```
 tests/fixtures/python/bad_handler.py
@@ -69,8 +56,8 @@ tests/fixtures/python/bad_handler.py
 
 ## In CI
 
-Findings render inline on the pull request that introduced them, which is the
-whole point for a bug class nobody notices for months:
+SARIF output means findings render inline on the pull request that introduced
+them:
 
 ```yaml
 - uses: amrutp24/replayguard@v1
@@ -81,7 +68,7 @@ whole point for a bug class nobody notices for months:
 The job needs `permissions: security-events: write` for the annotations. Set
 `fail-on: never` to annotate without blocking the merge.
 
-Or before the commit exists:
+There is also a pre-commit hook:
 
 ```yaml
 - repo: https://github.com/amrutp24/replayguard
@@ -90,65 +77,36 @@ Or before the commit exists:
     - id: replayguard
 ```
 
-## Developing
-
-One command verifies everything locally:
-
-```bash
-python scripts/verify.py
-```
-
-It runs five gates — import, lint, tests with a coverage floor, the CLI's exit
-codes and every output format, and a canary asserting the known-good fixtures
-produce **zero** findings. Exit code is 0 only if all five pass.
-
-The canary is the one that matters. A linter that fires on correct code gets
-uninstalled, after which it catches nothing, so a false positive is a worse
-failure than a missed bug and gets its own gate.
-
-```bash
-pip install -e ".[dev]"
-```
-
-## How far to trust it
-
-[VALIDATION.md](VALIDATION.md) records what has actually been tested, against
-whose code, and what is still unproven -- including the rules that have **never**
-produced a true positive outside this repository's own fixtures, and the false
-positives still known to be present.
-
-Read it before relying on a clean run.
-
 ## Rules
 
 | ID | What it catches | Why it breaks replay |
 |----|-----------------|----------------------|
 | **RG001** | Clock, random, or identity source outside a step | Produces a different value on replay; everything derived from it diverges |
-| **RG002** | Network or filesystem access outside a step | Diverges *and* repeats the side effect on every replay |
-| **RG003** | A step body writing to state it doesn't own | Silently lost — the body is skipped on replay, so the write never happens again |
-| **RG004** | Control flow depending on a nondeterministic value | Replay takes the other branch, so the operation sequence no longer matches the journal |
-| **RG005** | A step name built from an unstable source | Checkpoints match by name and order; a name that changes can't be matched, so the step re-executes |
-| **RG900** | Code whose region couldn't be resolved | Not a violation — a coverage gap, reported so a clean run means something |
+| **RG002** | Network or filesystem access outside a step | Diverges, and repeats the side effect on every replay |
+| **RG003** | A step body writing to state it doesn't own | The write lands on the first run and is skipped on replay, so the outer state silently reverts |
+| **RG004** | Control flow depending on a nondeterministic value | Replay can take the other branch, so the operation sequence no longer matches the journal |
+| **RG005** | A step name built from an unstable source | Checkpoints match by name and order; a changed name can't be matched, so the step re-executes |
+| **RG900** | Code whose region couldn't be resolved | Not a violation. A coverage gap, reported so a clean run means something |
 
-`replayguard rules --explain` prints the full rationale for each.
+`replayguard rules --explain` prints the rationale for each.
 
 ## Language support
 
-**All three runtimes with an official AWS durable execution SDK are supported.**
+Python, TypeScript/JavaScript, and Java are the three runtimes with an
+official AWS durable execution SDK. Rust has no official SDK; the frontend
+targets [pgdad/durable-rust](https://github.com/pgdad/durable-rust), whose own
+documentation says its determinism rules are documented rather than enforced.
+Go and .NET have community proofs of concept only and are out of scope for
+now.
 
-| Runtime | Status | Parser |
-|---------|--------|--------|
-| Python | ✅ | stdlib `ast` |
-| TypeScript / JavaScript | ✅ | tree-sitter |
-| Java | ✅ | tree-sitter |
-| Rust | ✅ | tree-sitter |
-| Go, .NET | ❌ Out of scope | Community proofs of concept only. |
+| Runtime | Parser |
+|---------|--------|
+| Python | stdlib `ast` |
+| TypeScript / JavaScript | tree-sitter |
+| Java | tree-sitter |
+| Rust | tree-sitter |
 
-Rust has no *official* AWS SDK; the frontend targets
-[pgdad/durable-rust](https://github.com/pgdad/durable-rust), whose own docs say
-its determinism rules are documented, not enforced. That is exactly this tool's job.
-
-The three SDKs don't just differ in syntax — they differ in shape:
+The SDKs differ in shape, not just syntax:
 
 | | Handler | Step |
 |---|---|---|
@@ -157,64 +115,61 @@ The three SDKs don't just differ in syntax — they differ in shape:
 | Java | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)` |
 | Rust | param typed `*Context` | `ctx.step("x", \|\| async { .. })` |
 
-The callback is first, second, and third respectively — and Java also has a
-two-argument overload, so its body is located by *kind* rather than by position.
-All three lower to one IR, so rules are written once. A rule that needed to know
-its language would mean the frontend hadn't normalized enough.
+The step body sits in a different argument position in each, and Java has a
+two-argument overload besides, so bodies are located by kind rather than by
+position. Everything lowers to one shared IR and the rules are written once,
+with no knowledge of which language they're inspecting.
 
-Genuine semantic differences *are* encoded per-frontend, and RG003 is where they
-show up:
+The semantic differences that matter are handled per-frontend, and RG003 is
+where they show up:
 
-- **Python** — a bare `x = 1` in a nested function creates a local binding, so it
-  can never be an outer write. Only mutation and `global`/`nonlocal` reach out.
-- **JavaScript** — the same assignment writes straight through to the enclosing
+- **Python**: a bare `x = 1` in a nested function creates a local binding, so
+  it can never be an outer write. Only mutation and `global`/`nonlocal` reach
+  out.
+- **JavaScript**: the same assignment writes straight through to the enclosing
   scope, so RG003 has more ways to fire.
-- **Java** — captured locals must be effectively final, so reassigning one is a
-  *compile error* and that violation class cannot exist. What remains is
-  collection mutation and instance/static field writes.
-- **Rust** — the narrowest of the four. Step closures are `Send + 'static`, so
-  capturing a borrowed reference does not compile at all; the borrow checker
-  rejects the JavaScript shape outright. What is left is interior mutability
-  through a shared handle — an `Arc<Mutex<_>>` locked and pushed to, or a
-  `static mut`.
-
-Four languages, four outer-write models, one rule.
+- **Java**: captured locals must be effectively final, so reassigning one is a
+  compile error and that violation class can't exist. What remains is
+  collection mutation and field writes.
+- **Rust**: the narrowest of the four. Step closures are `Send + 'static`, so
+  capturing a borrowed reference doesn't compile. What's left is interior
+  mutability through a shared handle, like an `Arc<Mutex<_>>` locked and
+  pushed to, or a `static mut`.
 
 ## Design
 
 ```
 source ──▶ frontend ──▶ IR ──▶ rules ──▶ findings ──▶ reporter
-           (per-lang)   (shared)  (shared)            text/json/sarif
+           (per-lang)  (shared) (shared)              text/json/sarif
 ```
 
-**Why AST and not pattern matching.** RG003 has to know whether a mutated name
-belongs to the step body or an enclosing scope. RG004 has to know whether a
-branch condition derives from a nondeterministic source. Neither question can be
-answered by matching source text, which is why this is a different kind of tool
-from the extractors that draw workflow diagrams.
+This is AST analysis, not pattern matching, because the questions need scope
+resolution: RG003 has to know whether a mutated name belongs to the step body
+or an enclosing scope, and RG004 has to know whether a branch condition
+derives from a nondeterministic source. Neither can be answered by matching
+source text.
 
-**Accuracy over coverage.** A linter that fires on correct code gets switched
-off, and then it catches nothing. Two rules exist mostly to prevent that: RG005
-ignores computed step names unless they interpolate something genuinely unstable
-(`` `item-${index}` `` is the pattern AWS recommends), and RG900 reports
-unresolved regions rather than silently passing them.
+False positives get particular attention, since a linter that fires on
+correct code gets uninstalled. RG005 ignores computed step names unless they
+interpolate something genuinely unstable (`` `item-${index}` `` is the pattern
+AWS recommends), and RG900 reports unresolved regions instead of silently
+passing them.
 
 ## What it doesn't do
 
-**Calls are not followed across function boundaries.** A handler that calls a
-private helper which does the I/O will not be flagged — analysis stops at the
-handler body. This is the largest known blind spot and is not covered by RG900.
+Calls are not followed across file boundaries. Within a file they are, and
+findings name the route, but a handler that calls into another module for its
+I/O will pass clean. This is the largest known blind spot.
 
-Static analysis also can't see nondeterminism inside a third-party library, data
-tainted several hops back, iteration order over an unordered collection, or
-concurrent completion order. It can't tell you what happens when the platform
-changes underneath a suspended execution either.
+Static analysis also can't see nondeterminism inside a third-party library,
+data tainted several hops back, iteration order over an unordered collection,
+or concurrent completion order. Some of that the dynamic half can catch.
 
 ## Dynamic replay-divergence
 
-Static analysis reasons about what code *might* do. The dynamic half runs the
-handler twice -- once normally, once in a world where the clock has moved and
-entropy is reseeded -- and diffs the operation journals:
+The static rules reason about what code might do. The dynamic harness runs
+the handler twice, once normally and once with the clock moved and entropy
+reseeded, and diffs the operation journals:
 
 ```bash
 replayguard replay app.orders:handler --event '{"orderId": "A1"}'
@@ -229,7 +184,7 @@ replay-divergence: 1 divergence(s) found.
 ```
 
 Or as an assertion next to the handler, so a determinism regression fails the
-build rather than surfacing on a resume months later:
+build instead of surfacing on a resume months later:
 
 ```python
 from replayguard.dynamic import assert_deterministic
@@ -238,21 +193,41 @@ def test_handler_is_deterministic():
     assert_deterministic(handler, {"orderId": "A1"})
 ```
 
-It needs no rule for the *source* of nondeterminism -- a clock inside a library,
-an iteration order, a value tainted many hops back. It measures the effect. On
-51 AWS conformance handlers it produced zero false alarms; on a handler whose
-step order comes from `random.sample` -- which no static rule covers -- it
-diverges.
+The harness needs no rule for the source of nondeterminism. A clock inside a
+library, an iteration order, a value tainted many hops back: it measures the
+effect, not the cause. On 51 AWS conformance handlers it produced zero false
+alarms; on a handler whose step order comes from `random.sample`, which no
+static rule covers, it diverges.
 
-It cannot prove determinism, only fail to disprove it, and the report says so.
+It can't prove determinism, only fail to disprove it, and the report says so.
 Handlers that suspend on a callback can't be checked locally.
+
+## Validation
+
+[VALIDATION.md](VALIDATION.md) records what has been tested against whose
+code: which rules have confirmed real-world findings, which are still
+unproven, the false positives that were found and fixed, and the bugs the
+validation found in the tool itself. Read it before relying on a clean run.
+
+## Developing
+
+```bash
+pip install -e ".[dev]"
+python scripts/verify.py
+```
+
+`verify.py` runs five gates: import, lint, tests with a coverage floor, the
+CLI's exit codes and output formats, and a canary asserting the known-good
+fixtures produce zero findings in every language. The canary matters most; a
+false positive is a worse failure here than a missed bug.
 
 ## Prior art
 
-[Temporal's `workflowcheck`](https://github.com/temporalio/sdk-go) does this for
-Temporal workflows — the category is proven, it just doesn't exist for AWS's
-primitive. [durable-viz](https://github.com/gunnargrosch/durable-viz) statically
-analyses durable handlers to draw flowcharts, but performs no validation.
+[Temporal's workflowcheck](https://github.com/temporalio/sdk-go) does this for
+Temporal workflows, so the category is proven; it just didn't exist for AWS's
+primitive. [durable-viz](https://github.com/gunnargrosch/durable-viz)
+statically analyses durable handlers to draw flowcharts, but performs no
+validation.
 
 ## License
 
