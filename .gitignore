@@ -12,6 +12,3 @@ venv/
 .coverage.*
 coverage.xml
 htmlcov/
-
-# Working notes for AI sessions - never published
-CLAUDE.md
