@@ -6,8 +6,33 @@ build-backend = "hatchling.build"
 name = "replayguard"
 version = "0.1.0"
 description = "Determinism checker for AWS Lambda durable functions"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Amrut Pagidipally", email = "amrut.pagidipally@gmail.com" }]
+keywords = [
+    "aws",
+    "lambda",
+    "durable-functions",
+    "determinism",
+    "linter",
+    "static-analysis",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/amrutp24/replayguard"
+Issues = "https://github.com/amrutp24/replayguard/issues"
 
 [project.optional-dependencies]
 typescript = ["tree-sitter>=0.25", "tree-sitter-typescript>=0.23"]
