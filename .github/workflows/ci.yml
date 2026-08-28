@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is what pyproject declares; the ceiling catches deprecations
+        # before they become someone else's bug report.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install with every extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" ruff
+
+      - name: Verify
+        # One command, five gates. Whatever passes locally passes here, which is
+        # the point of having a single entry point rather than a list of steps
+        # that drift apart from scripts/verify.py.
+        run: python scripts/verify.py
+
+  self-check:
+    # Dogfooding: the checker runs over its own fixtures and must exit clean on
+    # the good ones. A tool that cannot pass its own gate has no business
+    # annotating anyone else's pull request.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[all]"
+      - name: Check the known-good fixtures
+        run: |
+          replayguard check tests/fixtures/python/good_handler.py
+          replayguard check tests/fixtures/typescript/good_handler.ts
+          replayguard check tests/fixtures/java/GoodHandler.java
+          replayguard check tests/fixtures/rust/good_handler.rs

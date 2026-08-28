@@ -67,6 +67,29 @@ tests/fixtures/python/bad_handler.py
     71:17  note    RG900  could not resolve whether this code runs inside a step
 ```
 
+## In CI
+
+Findings render inline on the pull request that introduced them, which is the
+whole point for a bug class nobody notices for months:
+
+```yaml
+- uses: amrutp24/replayguard@v1
+  with:
+    path: src/
+```
+
+The job needs `permissions: security-events: write` for the annotations. Set
+`fail-on: never` to annotate without blocking the merge.
+
+Or before the commit exists:
+
+```yaml
+- repo: https://github.com/amrutp24/replayguard
+  rev: v0.1.0
+  hooks:
+    - id: replayguard
+```
+
 ## Developing
 
 One command verifies everything locally:

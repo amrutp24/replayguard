@@ -1,0 +1,11 @@
+- id: replayguard
+  name: replayguard (durable determinism)
+  description: >-
+    Check AWS Lambda durable functions for replay-determinism bugs before the
+    commit exists, rather than on a resume months later.
+  entry: replayguard check
+  language: python
+  # Only the four languages with a durable execution SDK. A repo is mostly not
+  # durable handlers, and running over everything would be wasted work.
+  types_or: [python, ts, java, rust]
+  pass_filenames: true
