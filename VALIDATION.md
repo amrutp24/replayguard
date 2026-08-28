@@ -219,8 +219,9 @@ are now pinned by regression tests.
 
 ## Bugs this validation found — in the tool, not the code
 
-Ten so far. None were catchable by the fixtures, because the same person wrote
-the fixtures and the frontends.
+Fourteen so far — thirteen from running against other people's code, one from
+testing the tool's own command line. None were catchable by the fixtures,
+because the same person wrote the fixtures and the frontends.
 
 ### From the AWS corpus
 
