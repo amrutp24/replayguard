@@ -49,3 +49,31 @@ jobs:
           replayguard check tests/fixtures/typescript/good_handler.ts
           replayguard check tests/fixtures/java/GoodHandler.java
           replayguard check tests/fixtures/rust/good_handler.rs
+
+  action-check:
+    # The composite action is what most people will actually run, and until now
+    # nothing exercised it -- the README documented a version tag that did not
+    # exist and no job ever invoked it. This runs the action as a consumer
+    # does, so a broken action fails here rather than in someone else's repo.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Action passes a clean handler
+        uses: ./
+        with:
+          path: tests/fixtures/python/good_handler.py
+          upload-sarif: "false"
+
+      - name: Action reports findings without failing the step
+        # fail-on: never proves the gate input is honoured. The run that
+        # asserts a non-zero exit lives in scripts/verify.py; here the point is
+        # that the action wires its inputs through correctly.
+        uses: ./
+        with:
+          path: tests/fixtures/python/bad_handler.py
+          fail-on: never
+          upload-sarif: "false"

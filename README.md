@@ -75,7 +75,7 @@ SARIF output means findings render inline on the pull request that introduced
 them:
 
 ```yaml
-- uses: amrutp24/replayguard@v1
+- uses: amrutp24/replayguard@v0.1.0
   with:
     path: src/
 ```
