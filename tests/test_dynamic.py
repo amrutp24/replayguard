@@ -211,3 +211,95 @@ def test_handler_failing_after_operations_still_gets_a_verdict():
     assert not report.diverged, report.render()
     assert "Both runs failed identically" in report.render()
     assert "rejected" in report.render()
+
+
+# -- divergence classification ------------------------------------------------
+# _compare is pure over two journals, so every kind of divergence the report can
+# name is pinned here directly -- no handler needed. These reasons are what a
+# user reads when their build goes red; each must attach to the right shape.
+
+from replayguard.dynamic.diverge import _compare  # noqa: E402
+
+
+def test_extra_operation_is_named_as_such():
+    control = Journal([Entry("step", "a")])
+    other = Journal([Entry("step", "a"), Entry("step", "b")])
+    (d,) = _compare(control, other)
+    assert d.reason == "extra operation under perturbation"
+    assert d.control is None
+
+
+def test_missing_operation_is_named_as_such():
+    control = Journal([Entry("step", "a"), Entry("step", "b")])
+    other = Journal([Entry("step", "a")])
+    (d,) = _compare(control, other)
+    assert d.reason == "operation missing under perturbation"
+    assert d.perturbed is None
+
+
+def test_changed_kind_is_control_flow_divergence():
+    control = Journal([Entry("step", "a")])
+    other = Journal([Entry("wait", "a")])
+    (d,) = _compare(control, other)
+    assert "kind" in d.reason
+
+
+def test_changed_nesting_is_structure_divergence():
+    control = Journal([Entry("step", "a", depth=0)])
+    other = Journal([Entry("step", "a", depth=1)])
+    (d,) = _compare(control, other)
+    assert "nesting" in d.reason
+
+
+def test_one_run_raising_is_itself_a_divergence():
+    """Same operations, but only the perturbed world failed.
+
+    The journals match entry for entry, so without this check the run would
+    read as clean -- when in fact the perturbation changed the outcome, which
+    is the strongest divergence there is.
+    """
+    entries = [Entry("step", "a")]
+    control = Journal(list(entries))
+    other = Journal(list(entries), error="boom")
+    divs = _compare(control, other)
+    assert any("one run raised" in d.reason for d in divs)
+
+
+def test_identical_failures_alone_are_not_a_divergence():
+    """Both worlds failing the same way is deterministic, not divergent."""
+    control = Journal([Entry("step", "a")], error="boom")
+    other = Journal([Entry("step", "a")], error="boom")
+    assert _compare(control, other) == []
+
+
+# -- the pytest-facing API ----------------------------------------------------
+
+
+def test_assert_deterministic_raises_on_divergence():
+    """This is the function users put in their own test suites.
+
+    It must raise AssertionError (so pytest reports a failure, not an error)
+    and carry the rendered report, because the traceback is all the user sees.
+    """
+    from replayguard.dynamic import assert_deterministic
+
+    with pytest.raises(AssertionError, match="name changed"):
+        assert_deterministic(_clock_named_step, {})
+
+
+def test_assert_deterministic_passes_a_clean_handler():
+    from replayguard.dynamic import assert_deterministic
+
+    assert_deterministic(_deterministic, {})
+
+
+def test_assert_deterministic_raises_runtime_error_when_it_cannot_answer():
+    """A harness limit must not read as a pass or a failure of the handler."""
+    from replayguard.dynamic import assert_deterministic
+
+    @durable_execution
+    def explodes(event, context: DurableContext):
+        return context.step(lambda _: 1, name=f"op-{event['missing']}")
+
+    with pytest.raises(RuntimeError, match="nothing was compared"):
+        assert_deterministic(explodes, {})

@@ -61,7 +61,7 @@ branch = true
 # contrived input and low value to force.
 #
 # Ratchets UP only. If a change raises coverage, raise this with it.
-fail_under = 88
+fail_under = 90
 show_missing = true
 
 [tool.ruff]
