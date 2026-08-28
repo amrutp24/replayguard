@@ -96,12 +96,25 @@ def _clock_named_step(event, context: DurableContext):
 
 @durable_execution
 def _clock_branch(event, context: DurableContext):
-    # Parity, not `< 12`. The perturbation shifts the clock by an odd number of
-    # hours, so parity always flips; a noon boundary is only crossed for some
-    # starting times, which made this test pass or fail depending on when it ran.
-    if datetime.datetime.now().hour % 2 == 0:
-        return context.step(lambda _: "even", name="even-hour")
-    return context.step(lambda _: "odd", name="odd-hour")
+    # Three 8-hour buckets, because the branch has to be one the perturbation
+    # *always* crosses or the test is flaky by construction.
+    #
+    # Hour parity does not work, though it looks like it should. The skew is
+    # 13h07m11s, so the hour advances by 13 normally but by 14 when the current
+    # minute is >= 53 and the extra 7m11s rolls the hour over a second time.
+    # Even shift, parity survives, test fails -- for 168 of the 1440 minutes in
+    # a day. No parity-style predicate can be made safe here: a shift that is
+    # sometimes odd and sometimes even preserves parity half the time.
+    #
+    # Buckets of 8 hours are safe for a structural reason instead. The shift is
+    # always between 8 and 16 hours, so it can never land back inside the
+    # bucket it started in, whichever of the two shifts applies.
+    hour = datetime.datetime.now().hour
+    if hour < 8:
+        return context.step(lambda _: "night", name="night-shift")
+    if hour < 16:
+        return context.step(lambda _: "day", name="day-shift")
+    return context.step(lambda _: "evening", name="evening-shift")
 
 
 @durable_execution
