@@ -64,9 +64,18 @@ class Report:
         if self.harness_error:
             return f"replay-divergence: could not run -- {self.harness_error}"
         if not self.divergences:
+            failed = ""
+            if self.control.error:
+                # Both runs raised the same way -- deterministic, but only over
+                # the operations that ran before the failure. Saying just "no
+                # divergence" would read as "the handler worked".
+                failed = (
+                    f"\nBoth runs failed identically ({self.control.error}), so only "
+                    "the operations before the failure were compared."
+                )
             return (
                 f"replay-divergence: no divergence across "
-                f"{len(self.control)} operation(s).\n"
+                f"{len(self.control)} operation(s).{failed}\n"
                 "This is evidence of determinism, not proof: a handler may still "
                 "diverge under a perturbation this run did not apply."
             )
@@ -205,6 +214,21 @@ def check_handler(
         )
     except Exception as exc:  # the handler or the runner blew up
         return Report(Journal(), Journal(), harness_error=f"{type(exc).__name__}: {exc}")
+
+    if control.error and other.error and not len(control) and not len(other):
+        # Nothing was journaled in either world, so there was nothing to diff.
+        # Reporting "no divergence" here would hand back a green check for a
+        # handler that never ran -- the one failure mode this tool exists to
+        # avoid. Note that a handler which fails *after* some operations still
+        # gets a real comparison; only the vacuous case is refused.
+        return Report(
+            control,
+            other,
+            harness_error=(
+                f"the handler raised before performing any operation ({control.error}); "
+                "nothing was compared, so this run says nothing about determinism"
+            ),
+        )
 
     return Report(control, other, _compare(control, other))
 

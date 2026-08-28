@@ -171,3 +171,43 @@ def test_suspended_handler_is_a_harness_limit_not_a_divergence():
     assert report.harness_error
     assert not report.diverged
     assert "suspends" in report.harness_error
+
+
+def test_handler_that_never_runs_is_not_reported_as_clean():
+    """A handler that raises immediately gets no verdict at all.
+
+    Both runs fail the same way, so nothing diverges -- and the honest reading
+    of that is not "deterministic", it is "nothing was compared". Reported as a
+    clean run it would hand a green CI check to a handler that never executed
+    an operation, which is the single worst thing this tool could do.
+    """
+
+    @durable_execution
+    def explodes(event, context: DurableContext):
+        return context.step(lambda _: 1, name=f"op-{event['missing']}")
+
+    report = check_handler(explodes, {})
+    assert report.harness_error, report.render()
+    assert not report.diverged
+    assert "nothing was compared" in report.harness_error
+
+
+def test_handler_failing_after_operations_still_gets_a_verdict():
+    """Only the vacuous case is refused.
+
+    A durable execution can legitimately end FAILED -- a validation path, a step
+    that gives up. Its operations up to that point are still worth comparing, so
+    the run gets a real answer, with the failure stated rather than hidden
+    behind "no divergence".
+    """
+
+    @durable_execution
+    def fails_late(event, context: DurableContext):
+        context.step(lambda _: "ok", name="first")
+        raise ValueError("rejected")
+
+    report = check_handler(fails_late, {})
+    assert not report.harness_error, report.harness_error
+    assert not report.diverged, report.render()
+    assert "Both runs failed identically" in report.render()
+    assert "rejected" in report.render()

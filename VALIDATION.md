@@ -37,14 +37,25 @@ covered, and that is where every real bug in this tool was found.
 
 ## Current state
 
-| Rule | AWS | Community | Confirmed real | Known false positives |
-|---|---:|---:|---:|---|
-| RG001 clock/random/identity | 11 | 2 | yes | none known |
-| RG002 external I/O | 0 | 0 | **never fired** | n/a |
-| RG003 outer write in step | 0 | 5 | yes | **none known** |
-| RG004 nondeterministic branch | 0 | 0 | **never fired** | none known |
-| RG005 unstable operation name | 0 | 0 | **never fired** | none known |
-| RG900 coverage gap (note) | 32 | 19 | n/a | n/a |
+| Rule | AWS | Community | Confirmed real | Fires in py/ts/java/rust | Known false positives |
+|---|---:|---:|---:|:-:|---|
+| RG001 clock/random/identity | 11 | 2 | yes | 4/4 | none known |
+| RG002 external I/O | 0 | 0 | not yet in the wild | 4/4 | n/a |
+| RG003 outer write in step | 0 | 5 | yes | 4/4 | **none known** |
+| RG004 nondeterministic branch | 0 | 0 | not yet in the wild | 4/4 | none known |
+| RG005 unstable operation name | 0 | 0 | not yet in the wild | 4/4 | none known |
+| RG900 coverage gap (note) | 32 | 19 | n/a | n/a | n/a |
+
+The last two columns answer different questions and neither substitutes for the
+other. **Fires in 4/4** means the rule was handed that mistake, written the way
+each language actually expresses it, and reported it -- `tests/test_rule_matrix.py`,
+20 cells, enforced on every run. **Confirmed real** means someone else's code
+contained the mistake. A rule can be 4/4 and still have found nothing real,
+which is exactly the position RG002, RG004 and RG005 are in.
+
+The same file runs the negative half: a correct handler in each language -- the
+same work, every clock checkpointed and every value returned from its step
+rather than written from inside one -- must produce **nothing**. 4/4 silent.
 
 **Rust corpus: 105 handlers, 134 operations, zero findings.** The SDK authors'
 own code is deterministic, which is what one would hope -- and it is a
@@ -67,10 +78,14 @@ test asserting the bug manifests.
 true positives -- the saga, and two `resizeAttempts` counters -- with no known
 false positives remaining after the read-back check.
 
-**Unproven, and probably for a good reason.** RG002, RG004 and RG005 have never
-produced a true positive on code written by someone else. A deliberate hunt for
-evidence (2026-08-19) concluded that **the silence is correct, not broken** --
-see below.
+**Working, but unproven in the field.** RG002, RG004 and RG005 have never
+produced a true positive on code written by someone else. Two separate things
+were done about that. A deliberate hunt for evidence (2026-08-19) concluded that
+**the silence is correct, not broken** -- see below. And the rule matrix
+(2026-08-27) hands each of them its own mistake in all four languages and
+requires a finding, so "no findings" can no longer quietly mean "no detector".
+Neither of those makes them proven: a rule that works on a snippet written by
+the person who wrote the rule has not yet met code written under deadline.
 
 ---
 
@@ -104,7 +119,8 @@ effect, not the cause.
 **What it cannot do.** Prove determinism. A handler that survives this
 perturbation may diverge under another, and the report says so rather than
 claiming a clean bill of health. It also cannot check handlers that suspend
-waiting for a callback.
+waiting for a callback, and it now refuses to answer at all for a handler that
+raises before its first operation — see bug 14 below.
 
 ## Why RG002, RG004 and RG005 never fire
 
@@ -125,11 +141,17 @@ So published durable-function code puts its I/O inside steps, branches on
 checkpointed data, and names operations stably. The three rules guard against
 mistakes competent authors do not make in example code they publish.
 
-**The rules do fire.** A positive control -- a realistic handler containing an
-audit write outside a step, a branch on `new Date()`, and an operation named
-``ship-${Date.now()}`` -- produces RG002, RG004 and RG005 correctly. That is
-synthetic and is **not** evidence; it only separates "nothing to find" from
-"broken".
+**The rules do fire.** `tests/test_rule_matrix.py` gives each rule its own
+minimal violation in each of the four languages -- an unstepped `fetch`, a branch
+on `Date.now()`, an operation named ``op-${Date.now()}`` -- and fails if the rule
+stays quiet. All 20 cells fire. Each violation is written the way its language
+would actually express it: the Rust RG003 case uses `Arc<Mutex<..>>`, because a
+borrowed capture will not compile under that SDK's `Send + 'static` bound, so
+interior mutability is the only shape the bug can take there.
+
+This is synthetic and is **not** evidence that anyone writes these bugs. It only
+separates "nothing to find" from "broken" -- and it now does so on every test
+run, rather than once by hand.
 
 **What this means.** These rules are unproven on real code and likely to stay
 that way against public examples. If they matter, the evidence will come from
@@ -197,7 +219,7 @@ are now pinned by regression tests.
 
 ## Bugs this validation found — in the tool, not the code
 
-Nine so far. None were catchable by the fixtures, because the same person wrote
+Ten so far. None were catchable by the fixtures, because the same person wrote
 the fixtures and the frontends.
 
 ### From the AWS corpus
@@ -251,6 +273,26 @@ Fixing 9 over-corrected — branch arrays passed to `parallel`/`map` were marked
 unknown when they are step bodies, tripling coverage notes until corrected. Only
 re-running the corpus caught it; the unit tests were green throughout.
 
+### From testing the CLI (2026-08-27)
+
+14. **A handler that crashed immediately was reported as clean.** Both runs of
+    the dynamic harness failed the same way, so no journal entry differed, so the
+    report said "no divergence across 0 operation(s)" and `replayguard replay`
+    exited 0. A handler that never executed an operation was getting a green CI
+    check from the tool whose entire purpose is to not do that.
+
+    Now split on whether anything was actually compared: both runs failing with
+    an **empty** journal is a harness error (exit 2, "nothing was compared, so
+    this run says nothing about determinism"); a handler that fails *after* some
+    operations still gets a real comparison, with the shared failure stated in
+    the report rather than hidden behind "no divergence". The second half matters
+    because a durable execution ending FAILED is a legitimate path someone may
+    want checked.
+
+    Found by writing the first tests for the `replay` subcommand, which had 0%
+    coverage — the dynamic engine was well tested, the only way anyone reaches it
+    was not.
+
 ---
 
 ## Known false negatives
@@ -281,9 +323,17 @@ corrected two details, both incorporated above.
 
 ## What would raise confidence next
 
-1. **The read-back check for RG003** — clears the four known false positives and
-   catches the class it currently misses.
-2. **A corpus that exercises RG002/RG004/RG005.** Three rules with no real-world
-   evidence is the biggest gap in this record.
-3. **Dynamic replay-divergence** — the only thing that can validate what static
-   analysis structurally cannot see.
+1. **A corpus that exercises RG002/RG004/RG005.** Three rules with no real-world
+   evidence is the biggest gap in this record, and the rule matrix does not close
+   it -- it only rules out the alternative explanation. Public example code does
+   not contain these mistakes; production code written under deadline does, and
+   none is accessible here.
+2. **Cross-file analysis.** A handler calling into another module is currently a
+   coverage gap (RG900), so a violation one call away is invisible to every rule.
+3. **A false-positive count from someone else's repository.** The 1,547-file
+   corpus was chosen by the tool's author. A repository chosen by its own
+   maintainer, judged by that maintainer, is the number that would actually
+   settle whether this is usable.
+
+Done since this section was written: the read-back check for RG003 (2026-08-19),
+the dynamic replay-divergence harness, and the rule matrix (2026-08-27).
