@@ -23,7 +23,7 @@ twice under different clocks and diffing what it did.
 
 ## Status
 
-v0.1.0. Validated against 1,547 files of durable-function code written by
+v0.1.1. Validated against 1,547 files of durable-function code written by
 other people; [VALIDATION.md](VALIDATION.md) records what that established and
 what it didn't.
 
@@ -75,7 +75,7 @@ SARIF output means findings render inline on the pull request that introduced
 them:
 
 ```yaml
-- uses: amrutp24/replayguard@v0.1.0
+- uses: amrutp24/replayguard@v0.1.1
   with:
     path: src/
 ```
@@ -87,7 +87,7 @@ There is also a pre-commit hook:
 
 ```yaml
 - repo: https://github.com/amrutp24/replayguard
-  rev: v0.1.0
+  rev: v0.1.1
   hooks:
     - id: replayguard
 ```
