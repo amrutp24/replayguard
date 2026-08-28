@@ -86,8 +86,18 @@ def stage_tests(s: Stage) -> None:
     proc = run(
         [sys.executable, "-m", "pytest", "-q", "--cov=replayguard", "--cov-report=term"]
     )
-    tail = "\n".join(proc.stdout.strip().splitlines()[-4:])
-    s.report("pytest + coverage floor", proc.returncode == 0, tail)
+    ok = proc.returncode == 0
+    # On success four lines is the useful summary. On failure it is not: pytest
+    # puts the reason at the top (a collection error, an unrecognised argument)
+    # and the tail is just the count, which is how a CI log once reported this
+    # stage failing while showing nothing about why. Failures print in full,
+    # stderr included, since that is where a missing plugin surfaces.
+    detail = (
+        "\n".join(proc.stdout.strip().splitlines()[-4:])
+        if ok
+        else (proc.stdout + proc.stderr).strip()
+    )
+    s.report("pytest + coverage floor", ok, detail)
 
 
 def stage_cli(s: Stage) -> None:
