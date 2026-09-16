@@ -10,12 +10,12 @@ Last full corpus run: 2026-08-19. The rule matrix and CLI tests were added
 
 ## Corpora
 
-| Corpus | Repos | Files | Durable handlers | Authors |
-|---|---:|---:|---:|---|
-| AWS samples + all three official SDKs | 5 | 755 | 415 | AWS |
-| Community | 11 | 685 | 422 | ~10 independent |
-| `pgdad/durable-rust` (Rust SDK) | 1 | 107 | 105 | 1 |
-| **Total** | **16** | **1,547** | **942** | |
+| Corpus                                | Repos  | Files     | Durable handlers | Authors         |
+| ------------------------------------- | -----: | --------: | ---------------: | --------------- |
+| AWS samples + all three official SDKs | 5      | 755       | 415              | AWS             |
+| Community                             | 11     | 685       | 422              | ~10 independent |
+| `pgdad/durable-rust` (Rust SDK)       | 1      | 107       | 105              | 1               |
+| **Total**                             | **16** | **1,547** | **942**          |                 |
 
 Community repos: `singledigit/durable-serverlesspresso`,
 `singledigit/durable-function-video-scanner`,
@@ -36,14 +36,14 @@ were found.
 
 ## Current state
 
-| Rule | AWS | Community | Confirmed real | Fires in py/ts/java/rust | Known false positives |
-|---|---:|---:|---:|:-:|---|
-| RG001 clock/random/identity | 11 | 2 | yes | 4/4 | none known |
-| RG002 external I/O | 0 | 0 | not yet in the wild | 4/4 | n/a |
-| RG003 outer write in step | 0 | 5 | yes | 4/4 | none known |
-| RG004 nondeterministic branch | 0 | 0 | not yet in the wild | 4/4 | none known |
-| RG005 unstable operation name | 0 | 0 | not yet in the wild | 4/4 | none known |
-| RG900 coverage gap (note) | 32 | 19 | n/a | n/a | n/a |
+| Rule                          | AWS | Community | Confirmed real      | Fires in py/ts/java/rust | Known false positives |
+| ----------------------------- | --: | --------: | ------------------: | :----------------------: | --------------------- |
+| RG001 clock/random/identity   | 11  | 2         | yes                 | 4/4                      | none known            |
+| RG002 external I/O            | 0   | 0         | not yet in the wild | 4/4                      | n/a                   |
+| RG003 outer write in step     | 0   | 5         | yes                 | 4/4                      | none known            |
+| RG004 nondeterministic branch | 0   | 0         | not yet in the wild | 4/4                      | none known            |
+| RG005 unstable operation name | 0   | 0         | not yet in the wild | 4/4                      | none known            |
+| RG900 coverage gap (note)     | 32  | 19        | n/a                 | n/a                      | n/a                   |
 
 The last two columns answer different questions. "Fires in 4/4" means the rule
 was handed its own mistake, written the way each language actually expresses
@@ -125,11 +125,11 @@ those have very different consequences, so this was checked directly rather
 than assumed. The durable regions of all 837 handlers in the AWS and community
 corpora were inspected, not just the findings:
 
-| Evidence | Result |
-|---|---|
+| Evidence                             | Result                                                                                                                                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Branch conditions in durable regions | 85 found. Every one tests stable data: `isinstance`, `Array.isArray`, `len`, checkpointed step results (`result.failed`, `decision.shouldRetry`), or event fields. Not one tests a clock or a random source. |
-| Non-literal operation names | 38 found. Every one derives from stable data: `tx.id`, `event.id`, `specialist.name`, a loop index. Not one from a clock. |
-| Calls in durable regions | Dominated by durable operations, logging, and pure helpers. No I/O. |
+| Non-literal operation names          | 38 found. Every one derives from stable data: `tx.id`, `event.id`, `specialist.name`, a loop index. Not one from a clock.                                                                                    |
+| Calls in durable regions             | Dominated by durable operations, logging, and pure helpers. No I/O.                                                                                                                                          |
 
 Published durable-function code puts its I/O inside steps, branches on
 checkpointed data, and names operations stably. These three rules guard

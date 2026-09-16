@@ -41,10 +41,10 @@ comes from the durable layer, which proves the durable machinery is engaged on
 a custom runtime rather than bypassed. And the protocol needs no privileged
 runtime hook. It's plain JSON in and plain AWS API calls out:
 
-| | Shape |
-|---|---|
-| in | `{DurableExecutionArn, CheckpointToken, InitialExecutionState, UpdatedOperationIds}` |
-| out | `{Status: SUCCEEDED \| FAILED \| PENDING \| RETRY, Result?, Error?}` |
+|     | Shape                                                                                |
+| --- | ------------------------------------------------------------------------------------ |
+| in  | `{DurableExecutionArn, CheckpointToken, InitialExecutionState, UpdatedOperationIds}` |
+| out | `{Status: SUCCEEDED \| FAILED \| PENDING \| RETRY, Result?, Error?}`                 |
 
 `PENDING` is how a handler suspends.
 
@@ -54,10 +54,10 @@ The full lifecycle. A `provided.al2023` function checkpointed a WAIT
 operation, returned `PENDING`, and the platform re-invoked it after the timer
 fired with that operation present in its state:
 
-| | Operations in state | Updated |
-|---|---|---|
-| invoke 1 | execution op | execution op |
-| invoke 2 | execution op, `rg-wait-1` | `rg-wait-1` |
+|          | Operations in state       | Updated      |
+| -------- | ------------------------- | ------------ |
+| invoke 1 | execution op              | execution op |
+| invoke 2 | execution op, `rg-wait-1` | `rg-wait-1`  |
 
 Final status `SUCCEEDED`. Suspend, checkpoint, resume, and replay-against-state
 all work on a custom runtime.

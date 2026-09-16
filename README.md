@@ -94,14 +94,14 @@ There is also a pre-commit hook:
 
 ## Rules
 
-| ID | What it catches | Why it breaks replay |
-|----|-----------------|----------------------|
-| **RG001** | Clock, random, or identity source outside a step | Produces a different value on replay; everything derived from it diverges |
-| **RG002** | Network or filesystem access outside a step | Diverges, and repeats the side effect on every replay |
-| **RG003** | A step body writing to state it doesn't own | The write lands on the first run and is skipped on replay, so the outer state silently reverts |
-| **RG004** | Control flow depending on a nondeterministic value | Replay can take the other branch, so the operation sequence no longer matches the journal |
-| **RG005** | A step name built from an unstable source | Checkpoints match by name and order; a changed name can't be matched, so the step re-executes |
-| **RG900** | Code whose region couldn't be resolved | Not a violation. A coverage gap, reported so a clean run means something |
+| ID        | What it catches                                    | Why it breaks replay                                                                           |
+| --------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **RG001** | Clock, random, or identity source outside a step   | Produces a different value on replay; everything derived from it diverges                      |
+| **RG002** | Network or filesystem access outside a step        | Diverges, and repeats the side effect on every replay                                          |
+| **RG003** | A step body writing to state it doesn't own        | The write lands on the first run and is skipped on replay, so the outer state silently reverts |
+| **RG004** | Control flow depending on a nondeterministic value | Replay can take the other branch, so the operation sequence no longer matches the journal      |
+| **RG005** | A step name built from an unstable source          | Checkpoints match by name and order; a changed name can't be matched, so the step re-executes  |
+| **RG900** | Code whose region couldn't be resolved             | Not a violation. A coverage gap, reported so a clean run means something                       |
 
 `replayguard rules --explain` prints the rationale for each.
 
@@ -114,21 +114,21 @@ documentation says its determinism rules are documented rather than enforced.
 Go and .NET have community proofs of concept only and are out of scope for
 now.
 
-| Runtime | Parser |
-|---------|--------|
-| Python | stdlib `ast` |
-| TypeScript / JavaScript | tree-sitter |
-| Java | tree-sitter |
-| Rust | tree-sitter |
+| Runtime                 | Parser       |
+| ----------------------- | ------------ |
+| Python                  | stdlib `ast` |
+| TypeScript / JavaScript | tree-sitter  |
+| Java                    | tree-sitter  |
+| Rust                    | tree-sitter  |
 
 The SDKs differ in shape, not just syntax:
 
-| | Handler | Step |
-|---|---|---|
-| Python | `@durable_execution` | `context.step(fn, name="x")` |
-| JS/TS | `withDurableExecution(fn)` | `context.step("x", fn)` |
-| Java | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)` |
-| Rust | param typed `*Context` | `ctx.step("x", \|\| async { .. })` |
+|        | Handler                     | Step                               |
+| ------ | --------------------------- | ---------------------------------- |
+| Python | `@durable_execution`        | `context.step(fn, name="x")`       |
+| JS/TS  | `withDurableExecution(fn)`  | `context.step("x", fn)`            |
+| Java   | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)`  |
+| Rust   | param typed `*Context`      | `ctx.step("x", \|\| async { .. })` |
 
 The step body sits in a different argument position in each, and Java has a
 two-argument overload besides, so bodies are located by kind rather than by
