@@ -104,6 +104,10 @@ _TRANSPARENT = {
     "reference_expression",
 }
 
+#: Matches the other three frontends. Deep chains are rare and the cost of
+#: following them is paid on every call site.
+_MAX_CALL_DEPTH = 5
+
 
 def _load_parser():
     try:
@@ -217,6 +221,14 @@ class _ModuleContext:
         #: `use` aliases, so `chrono::Utc` resolves when written bare.
         self.aliases: dict[str, str] = {}
         self.statics: set[str] = set()
+        #: Top-level `fn` items by name, so a call can be followed into its
+        #: body. Without this a handler reads clean whenever the clock or the
+        #: I/O lives one `fn` away, which is the ordinary way Rust is written.
+        self.functions: dict[str, object] = {}
+        for item in _descend(root, {"function_item"}):
+            fn_name = item.child_by_field_name("name")
+            if fn_name is not None:
+                self.functions.setdefault(src.text(fn_name), item)
         for use in _descend(root, {"use_declaration"}):
             text = src.text(use)
             leaf = text.rstrip(";").split("::")[-1].strip()
@@ -236,7 +248,15 @@ class _Walker:
         self.scopes: list[set[str]] = []
         self.current_step_id: int | None = None
         self._step_counter = 0
-        self.via: tuple[str, ...] = ()
+        self.via: list[str] = []
+        #: (function node id, region) pairs already walked. The same helper
+        #: reached twice is walked once per region, because a helper is a
+        #: violation when the durable region calls it and correct when a step
+        #: body does.
+        self.walked: set[tuple[int, Region]] = set()
+        #: Names of handlers in this file, so following a call never wanders
+        #: into another handler and attributes its findings to this one.
+        self.handler_names: set[str] = set()
         #: One map per scope, parallel to `scopes`. local -> the name it aliases. `let r = Arc::clone(&outer)` inside a
         #: step closure rebinds the name locally, so a plain scope check says
         #: "not outer" -- but the Arc points at the caller's data and a write
@@ -431,14 +451,59 @@ class _Walker:
                     dotted=self._canonical(dotted),
                     loc=self.src.loc(node),
                     region=region,
-                    via=self.via,
+                    via=tuple(self.via),
                     display=dotted if self._canonical(dotted) != dotted else None,
                 )
             )
             self._record_mutating_call(node, func, region)
 
+        self._walk_callee(func, region)
+
         for child in node.children:
             self.visit(child, region)
+
+    def _walk_callee(self, func, region: Region) -> None:
+        """Follow a call into a `fn` defined in the same file.
+
+        The region travels with the call, not with the definition. The same
+        helper is a violation when the durable region calls it and perfectly
+        correct when a step body does, so what matters is where the call was
+        made rather than where the function was written.
+        """
+        if func is None or func.type != "identifier":
+            return
+        name = self.src.text(func)
+        if name in self.handler_names:
+            return
+
+        target = self.ctx.functions.get(name)
+        if target is None:
+            return
+
+        if len(self.via) >= _MAX_CALL_DEPTH:
+            # Past the cap the chain goes unanalysed. Record the gap instead of
+            # stopping quietly: a silently truncated walk implies a clean
+            # result the checker has not earned, which is what RG900 is for.
+            self.h.unresolved.append(self.src.loc(func))
+            return
+
+        key = (id(target), region)
+        if key in self.walked:
+            return
+        self.walked.add(key)
+
+        # A top-level `fn` is not a closure. It cannot see the handler's
+        # locals, so leaving them on the scope stack would make an ordinary
+        # parameter read look like a captured-variable write and hand RG003 a
+        # false positive.
+        saved_scopes, saved_aliases = self.scopes, self.alias_scopes
+        self.scopes, self.alias_scopes = [], []
+        self.via.append(name)
+        try:
+            self.walk_body(target, region)
+        finally:
+            self.via.pop()
+            self.scopes, self.alias_scopes = saved_scopes, saved_aliases
 
     def _canonical(self, dotted: str) -> str:
         """Strip a crate prefix so `chrono::Utc::now` matches `Utc::now`."""
@@ -454,7 +519,7 @@ class _Walker:
                 loc=self.src.loc(node),
                 region=Region.STEP_BODY,
                 is_global=is_global,
-                via=self.via,
+                via=tuple(self.via),
                 step_id=self.current_step_id,
             )
         )
@@ -505,7 +570,7 @@ class _Walker:
                 loc=self.src.loc(node),
                 region=region,
                 condition_symbols=symbols,
-                via=self.via,
+                via=tuple(self.via),
             )
         )
 
@@ -634,9 +699,16 @@ def parse_source(source: str, path: str) -> Module:
     ctx = _ModuleContext(src, tree.root_node)
     module = Module(path=path, language=Language.RUST)
 
-    for name, node in _find_handlers(src, tree.root_node):
+    handlers = _find_handlers(src, tree.root_node)
+    handler_names = {name for name, _ in handlers}
+
+    for name, node in handlers:
         handler = Handler(name=name, loc=src.loc(node), language=Language.RUST)
-        _Walker(src, ctx, handler).walk_body(node, Region.DURABLE)
+        walker = _Walker(src, ctx, handler)
+        # Following a call must never wander into another handler, or its
+        # findings get attributed to this one and reported twice.
+        walker.handler_names = handler_names
+        walker.walk_body(node, Region.DURABLE)
         module.handlers.append(handler)
     return module
 

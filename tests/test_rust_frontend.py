@@ -290,3 +290,100 @@ def test_unknown_receiver_is_not_a_durable_operation():
         "h.rs",
     )
     assert module.handlers[0].steps == []
+
+
+# -- interprocedural, same file ----------------------------------------------
+# Rust was the only frontend that never followed a call. A handler read clean
+# whenever the clock or the I/O sat one `fn` away, which is how Rust is
+# ordinarily written -- and the README claimed all four languages did this.
+
+
+def test_call_into_a_local_fn_is_followed():
+    findings = source_findings(
+        '    let t = helper();\n    Ok(json!({"t": t}))',
+        extra="fn helper() -> i64 { Utc::now().timestamp() }",
+    )
+    assert "RG001" in {f.rule for f in findings}
+
+
+def test_the_route_is_named():
+    """A finding one hop away is not much use without the path that reached it."""
+    findings = source_findings(
+        '    let t = outer();\n    Ok(json!({"t": t}))',
+        extra=(
+            "fn inner() -> i64 { Utc::now().timestamp() }\nfn outer() -> i64 { inner() }"
+        ),
+    )
+    rationale = " ".join(f.rationale for f in findings)
+    assert "outer() -> inner()" in rationale
+
+
+def test_io_reached_through_a_helper():
+    findings = source_findings(
+        '    let c = load();\n    Ok(json!({"c": c}))',
+        extra='fn load() -> String { std::fs::read_to_string("/tmp/x").unwrap() }',
+    )
+    assert "RG002" in {f.rule for f in findings}
+
+
+def test_the_same_helper_is_clean_when_a_step_calls_it():
+    """The region travels with the call, not with the definition.
+
+    This is what makes following calls safe at all. A clock inside a helper is
+    a bug when the durable region reaches it and entirely correct when a step
+    body does, and getting it backwards would fire on correct code.
+    """
+    findings = source_findings(
+        '    let t = ctx.step("t", || async { Ok::<_, String>(helper()) }).await?;\n'
+        '    Ok(json!({"t": t}))',
+        extra="fn helper() -> i64 { Utc::now().timestamp() }",
+    )
+    assert findings == [], "\n".join(f"{f.rule} {f.message}" for f in findings)
+
+
+def test_mutual_recursion_terminates():
+    """Two functions calling each other must not hang the walk."""
+    findings = source_findings(
+        '    let t = a();\n    Ok(json!({"t": t}))',
+        extra="fn a() -> i64 { b() }\nfn b() -> i64 { a() }",
+    )
+    assert findings == []
+
+
+def test_depth_cap_records_a_coverage_gap():
+    """Past the cap the chain goes unanalysed, and that gets reported.
+
+    Truncating the walk silently would imply a clean result the checker has
+    not earned, which is the thing RG900 exists to prevent.
+    """
+    chain = "\n".join(f"fn f{i}() -> i64 {{ f{i + 1}() }}" for i in range(7))
+    chain += "\nfn f7() -> i64 { Utc::now().timestamp() }"
+    module = rust_frontend.parse_source(
+        PRELUDE
+        + chain
+        + "\n#[durable_execution]\n"
+        "async fn handler(event: Value, mut ctx: DurableContext)"
+        " -> Result<Value, Error> {\n"
+        '    let t = f0();\n    Ok(json!({"t": t}))\n}\n',
+        "h.rs",
+    )
+    assert module.handlers[0].unresolved, "depth cap did not record a coverage gap"
+
+
+def test_a_handler_is_not_walked_as_a_helper():
+    """Two handlers in one file must not absorb each other's findings."""
+    module = rust_frontend.parse_source(
+        PRELUDE
+        + "#[durable_execution]\n"
+        "async fn first(event: Value, mut ctx: DurableContext)"
+        " -> Result<Value, Error> {\n"
+        '    let t = Utc::now();\n    Ok(json!({"t": t}))\n}\n'
+        "#[durable_execution]\n"
+        "async fn second(event: Value, mut ctx: DurableContext)"
+        " -> Result<Value, Error> {\n"
+        "    Ok(json!({}))\n}\n",
+        "h.rs",
+    )
+    by_name = {h.name: rules.check(h) for h in module.handlers}
+    assert {f.rule for f in by_name["first"]} == {"RG001"}
+    assert by_name["second"] == []

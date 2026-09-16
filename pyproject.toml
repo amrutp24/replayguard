@@ -70,12 +70,20 @@ packages = ["src/replayguard"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# `fail_under` in [tool.coverage.report] only prints; it does not change
+# pytest's exit code, so the floor sat there for weeks reporting FAIL while the
+# gate went green. Passing it as a pytest option is what actually enforces it.
+addopts = "--cov-fail-under=90"
 
 [tool.coverage.run]
 source = ["replayguard"]
 branch = true
 
 [tool.coverage.report]
+# Two decimals, because the floor is compared against the *rounded*
+# figure. At precision 0 anything from 89.5 up counts as 90, so the
+# report printed FAIL while the run exited 0.
+precision = 2
 # Branch coverage, so this is stricter than the line-coverage figure.
 #
 # 88 is the measured value with meaningful tests, not a target. An earlier 90

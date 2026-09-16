@@ -210,8 +210,8 @@ are pinned by regression tests now.
 
 ## Bugs this validation found — in the tool, not the code
 
-Fourteen so far: thirteen from running against other people's code, one from
-testing the tool's own command line. None were catchable by the fixtures,
+Sixteen so far: thirteen from running against other people's code, three from
+testing the tool itself. None were catchable by the fixtures,
 because the same person wrote the fixtures and the frontends.
 
 ### From the AWS corpus
@@ -286,6 +286,36 @@ throughout.
     coverage. The dynamic engine was well tested; the only way anyone reaches
     it wasn't.
 
+### From extending the frontends (2026-09-15)
+
+15. **The Rust frontend never followed a call.** Python, TypeScript and Java
+    all walk into a function defined in the same file; Rust silently did not,
+    so a handler read clean whenever the clock or the I/O sat one `fn` away.
+    That is the ordinary way Rust is written, and the README claimed all four
+    languages did this. Found by testing the same minimal case across all four
+    frontends before starting cross-file work.
+
+    Fixed, with the region travelling with the call rather than the definition,
+    a depth cap that records RG900 rather than truncating silently, and a guard
+    so one handler is never walked as another's helper.
+
+    **It changed nothing on the corpus.** Re-running `pgdad/durable-rust` gave
+    105 handlers and 134 operations, identical to the original run, with zero
+    calls reached through a helper. Those handlers are self-contained, so the
+    weakness had not been hiding anything there. The earlier "zero findings"
+    conclusion stands, now for a better reason.
+
+16. **The coverage floor never failed anything.** `fail_under` under
+    `[tool.coverage.report]` prints `FAIL Required test coverage not reached`
+    but does not change pytest's exit code, so the gate went green while the
+    report said otherwise. The floor had been raised 88 -> 90 specifically to
+    stop drift and was decorative the whole time. Enforcing it needs
+    `--cov-fail-under` as a pytest option.
+
+    A second layer underneath: pytest-cov compares the *rounded* figure, so at
+    the default precision of 0 anything from 89.5 counts as 90. `precision = 2`
+    makes the printed number and the exit code agree.
+
 ---
 
 ## Known false negatives
@@ -319,9 +349,17 @@ two details were corrected and are incorporated above.
    close it; it only rules out the alternative explanation. Public example
    code doesn't contain these mistakes. Production code written under deadline
    does, and none is accessible from here.
-2. Cross-file analysis. A handler calling into another module is currently a
-   coverage gap (RG900), so a violation one call away is invisible to every
-   rule.
+2. Cross-file analysis, but there is nothing to validate it against.
+   Measured 2026-09-15 on the Rust corpus: of 528 calls in durable regions, the
+   ones that resolve to nothing are all language builtins (`Ok` 119 times,
+   `to_string`, `as_str`, `Err`) plus two closure parameters. **Not one is a
+   user function in another file.** The handlers are self-contained, and the
+   AWS Python and TypeScript samples are single-file demos.
+
+   So the feature is real but unmeasurable here: it would be built on a
+   hypothesis about production code, with no public corpus able to confirm it
+   works or that it does not produce noise. That is the same trap as the three
+   unproven rules, and worth naming before repeating it.
 3. A false-positive count from someone else's repository. This corpus was
    chosen by the tool's author. A repository chosen by its own maintainer and
    judged by that maintainer is the number that would settle whether this is
