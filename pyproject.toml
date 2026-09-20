@@ -18,6 +18,8 @@ keywords = [
     "determinism",
     "linter",
     "static-analysis",
+    "upgrade-safety",
+    "replay",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -42,7 +44,12 @@ dynamic = [
     "aws-durable-execution-sdk-python>=1.7",
     "aws-durable-execution-sdk-python-testing>=1.2",
 ]
+# `replayguard drift` is stdlib-only on purpose -- a tool that warns about
+# dependency drift should not arrive with a dependency tree. Only the live
+# `probe`, which deploys to a real account, needs a client.
+live = ["boto3>=1.35"]
 all = [
+    "boto3>=1.35",
     "tree-sitter>=0.25",
     "tree-sitter-typescript>=0.23",
     "tree-sitter-java>=0.23",
@@ -51,6 +58,7 @@ all = [
     "aws-durable-execution-sdk-python-testing>=1.2",
 ]
 dev = [
+    "boto3>=1.35",
     "pytest>=8",
     "pytest-cov>=5",
     "tree-sitter>=0.25",
@@ -73,11 +81,28 @@ testpaths = ["tests"]
 # `fail_under` in [tool.coverage.report] only prints; it does not change
 # pytest's exit code, so the floor sat there for weeks reporting FAIL while the
 # gate went green. Passing it as a pytest option is what actually enforces it.
-addopts = "--cov-fail-under=90"
+addopts = "--cov-fail-under=91"
 
 [tool.coverage.run]
 source = ["replayguard"]
 branch = true
+# Three modules in the live probe provision and delete real IAM roles, Lambda
+# functions and DynamoDB tables. They cannot be unit tested without either an
+# AWS account or a mock detailed enough that it would be testing the mock --
+# and the whole point of the probe is that the platform's behaviour is not
+# something you can assert from a fixture. They are exercised by
+# `replayguard probe` against a real account, which is a stronger check than a
+# mock would give, and the evidence lives in drift-study/.
+#
+# Excluded rather than allowed to drag the floor down, so that 90 keeps meaning
+# something for every module that CAN be tested. Everything else in probe/ --
+# the scenario matrix, the handler template, the findings renderer -- is tested
+# normally and included here.
+omit = [
+    "*/replayguard/probe/infra.py",
+    "*/replayguard/probe/deploy.py",
+    "*/replayguard/probe/runner.py",
+]
 
 [tool.coverage.report]
 # Two decimals, because the floor is compared against the *rounded*
@@ -95,7 +120,7 @@ precision = 2
 # contrived input and low value to force.
 #
 # Ratchets UP only. If a change raises coverage, raise this with it.
-fail_under = 90
+fail_under = 91
 show_missing = true
 
 [tool.ruff]

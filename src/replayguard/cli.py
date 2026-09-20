@@ -1,8 +1,14 @@
 """Command line interface.
 
-    replayguard check src/                    # human-readable
+    replayguard check src/                    # is this handler deterministic?
     replayguard check src/ --explain          # with rationale and fix
-    replayguard check src/ --format sarif -o r.sarif
+    replayguard replay app:handler            # does it diverge when replayed?
+
+    replayguard drift 1.7.0 2.0.0             # will this SDK upgrade reach
+                                              # executions already suspended?
+    replayguard drift --sweep                 # how often upgrades carry that risk
+    replayguard probe --list                  # live scenarios (needs an account)
+
     replayguard rules                         # what it checks and why
 """
 
@@ -199,7 +205,10 @@ def _cmd_rules(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="replayguard",
-        description="Determinism checker for AWS Lambda durable functions.",
+        description=(
+            "Replay safety for AWS Lambda durable functions: is your handler "
+            "deterministic, and will a deploy break work already in flight?"
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -245,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
     rules_cmd = sub.add_parser("rules", help="list the rules")
     rules_cmd.add_argument("--explain", action="store_true")
     rules_cmd.set_defaults(func=_cmd_rules)
+
+    # The other half of the contract: not "is this handler deterministic" but
+    # "does the code that resumes still match the code that suspended".
+    from . import drift_cli
+
+    drift_cli.add_parsers(sub)
 
     args = parser.parse_args(argv)
     return args.func(args)

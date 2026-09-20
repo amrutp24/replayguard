@@ -21,6 +21,63 @@ replayguard checks the rule two ways: statically, by analyzing handler source
 in Python, TypeScript, Java, and Rust, and dynamically, by running a handler
 twice under different clocks and diffing what it did.
 
+## Replay has two halves
+
+That rule is only half of what replay requires. Written out:
+
+1. **Your handler must be deterministic** — the same inputs take the same path
+   every time. `replayguard check` and `replayguard replay` cover this.
+2. **The code that resumes an execution must match the code that suspended it.**
+   A durable execution can be suspended for up to 366 days. Your deploy pipeline
+   does not pause for it, so the handler that wakes up may not be the handler
+   that went to sleep. `replayguard drift` and `replayguard probe` cover this.
+
+The second half is not a determinism problem, and a determinism checker cannot
+see it. Measured, against a live account: a handler with no clocks, no
+randomness and no I/O outside a `step()` — one that `replayguard check` passes
+with zero findings — had two of its steps swapped while it was suspended, and
+finished with status `SUCCEEDED` having **run one side effect twice and skipped
+another entirely**.
+
+The code was correct. The code that resumed was not the code that suspended.
+That is the gap the `drift` and `probe` commands close.
+
+```bash
+replayguard check src/            # is this handler deterministic?
+replayguard replay app:handler    # does it diverge when replayed?
+
+replayguard drift 1.7.0 2.0.0     # will this SDK upgrade reach in-flight work?
+replayguard drift --sweep         # how often do upgrades carry that risk?
+replayguard probe                 # what does the platform actually do? (live)
+```
+
+### What the drift half found
+
+Twelve scenarios against a real account, 2026-09-16. **Three corrupted the
+execution. All three reported `SUCCEEDED`. None produced a clean failure.**
+
+Checkpoints are matched to operations **by position** — not by name, and not by
+type. So the standard advice is pointed at the wrong thing:
+
+| Change while suspended | Result |
+|---|---|
+| Rename a step | **safe** — the name was never the identity |
+| Edit code outside all steps | safe |
+| Insert a step before a completed one | inserted step never ran; a second wait created |
+| Delete a completed step | the step *after* it never ran |
+| **Reorder two steps** | **one side effect ran twice, another never ran** |
+| Bundled SDK 1.7.0 ⇄ 2.0.0 | safe, both directions |
+
+And the fix is mechanical rather than a matter of care: **every corruption
+required `$LATEST`.** Lambda resolves an alias once at execution start and pins
+the execution to that version for its whole life, so invoking through a version
+or an alias makes all of it unreachable.
+
+Full record in [drift-study/FINDINGS.md](drift-study/FINDINGS.md), the mechanism
+and how to falsify it in [drift-study/MECHANISM.md](drift-study/MECHANISM.md),
+raw run output in [drift-study/](drift-study/). `probe` creates billable AWS
+resources and ships a verified teardown; `drift` is offline and stdlib-only.
+
 ## Status
 
 v0.1.1. Validated against 1,547 files of durable-function code written by

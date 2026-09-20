@@ -1,0 +1,469 @@
+{
+  "package": "aws-durable-execution-sdk-python",
+  "from_version": "1.7.0",
+  "to_version": "2.0.0",
+  "counts": {
+    "total": 50,
+    "in_flight": 12,
+    "silent": 8,
+    "in_flight_and_silent": 8,
+    "high": 8
+  },
+  "findings": [
+    {
+      "rule": "RD003",
+      "title": "Exception reparented",
+      "severity": "high",
+      "detection": "silent",
+      "subject": "exceptions.py::CallbackError",
+      "detail": "CallbackError was a subclass of ExecutionError, UnrecoverableError in 1.7.0 and is not in 2.0.0 (now: DurableOperationError). `except ExecutionError:` still compiles and still runs and no longer catches CallbackError.",
+      "in_flight": true
+    },
+    {
+      "rule": "RD006",
+      "title": "Checkpoint format module changed",
+      "severity": "high",
+      "detection": "silent",
+      "subject": "execution.py",
+      "detail": "serialization or checkpoint state handling changed; an execution that checkpointed under the old version will be replayed by this code",
+      "in_flight": true
+    },
+    {
+      "rule": "RD006",
+      "title": "Checkpoint format module changed",
+      "severity": "high",
+      "detection": "silent",
+      "subject": "serdes.py",
+      "detail": "serialization or checkpoint state handling changed; an execution that checkpointed under the old version will be replayed by this code",
+      "in_flight": true
+    },
+    {
+      "rule": "RD006",
+      "title": "Checkpoint format module changed",
+      "severity": "high",
+      "detection": "silent",
+      "subject": "state.py",
+      "detail": "serialization or checkpoint state handling changed; an execution that checkpointed under the old version will be replayed by this code",
+      "in_flight": true
+    },
+    {
+      "rule": "RD005",
+      "title": "Replay-path internals changed",
+      "severity": "medium",
+      "detection": "silent",
+      "subject": "concurrency/executor.py",
+      "detail": "replay-path module changed with no public API change",
+      "in_flight": true
+    },
+    {
+      "rule": "RD005",
+      "title": "Replay-path internals changed",
+      "severity": "medium",
+      "detection": "silent",
+      "subject": "operation/callback.py",
+      "detail": "replay-path module changed with no public API change",
+      "in_flight": true
+    },
+    {
+      "rule": "RD005",
+      "title": "Replay-path internals changed",
+      "severity": "medium",
+      "detection": "silent",
+      "subject": "operation/step.py",
+      "detail": "replay-path module changed with no public API change",
+      "in_flight": true
+    },
+    {
+      "rule": "RD005",
+      "title": "Replay-path internals changed",
+      "severity": "medium",
+      "detection": "silent",
+      "subject": "operation/wait.py",
+      "detail": "replay-path module changed with no public API change",
+      "in_flight": true
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "high",
+      "detection": "build",
+      "subject": "concurrency/executor.py::ConcurrentExecutor.__init__",
+      "detail": "(self, executables, max_concurrency, completion_config, sub_type_top, sub_type_iteration, name_prefix, serdes, item_serdes, summary_generator, nesting_type) -> (self, executables, max_concurrency, completion_config, sub_type_top, sub_type_iteration, name_prefix, serdes, operation_id_namespace, item_serdes, nesting_type); added operation_id_namespace; dropped summary_generator. On the replay path: the engine's contract changed, not just its callers.",
+      "in_flight": true
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "high",
+      "detection": "build",
+      "subject": "concurrency/executor.py::ConcurrentExecutor.replay",
+      "detail": "(self, execution_state, executor_context) -> (self, execution_state, executor_context, checkpointed_result); added checkpointed_result. On the replay path: the engine's contract changed, not just its callers.",
+      "in_flight": true
+    },
+    {
+      "rule": "RD002",
+      "title": "Exception class removed",
+      "severity": "high",
+      "detection": "build",
+      "subject": "exceptions.py::CallableRuntimeError",
+      "detail": "CallableRuntimeError no longer exists in 2.0.0. An `except CallableRuntimeError:` fails at import -- but a handler that caught it was catching a real failure mode, and whatever now replaces it is uncaught until the handler is rewritten. On replay this surfaces where a checkpointed failure is re-raised.",
+      "in_flight": true
+    },
+    {
+      "rule": "RD002",
+      "title": "Exception class removed",
+      "severity": "high",
+      "detection": "build",
+      "subject": "exceptions.py::UserlandError",
+      "detail": "UserlandError no longer exists in 2.0.0. An `except UserlandError:` fails at import -- but a handler that caught it was catching a real failure mode, and whatever now replaces it is uncaught until the handler is rewritten. On replay this surfaces where a checkpointed failure is re-raised.",
+      "in_flight": true
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/executor.py::ConcurrentExecutor.should_execution_suspend",
+      "detail": "method ConcurrentExecutor.should_execution_suspend existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/executor.py::TimerScheduler",
+      "detail": "class TimerScheduler existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/models.py::BatchItemStatus",
+      "detail": "class BatchItemStatus existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/models.py::ExecutableWithState",
+      "detail": "class ExecutableWithState existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/models.py::ExecutionCounters",
+      "detail": "class ExecutionCounters existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "concurrency/models.py::SuspendResult",
+      "detail": "class SuspendResult existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::BatchedInput",
+      "detail": "class BatchedInput existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::InvokeConfig.timeout_seconds",
+      "detail": "method InvokeConfig.timeout_seconds existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::ItemBatcher",
+      "detail": "class ItemBatcher existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::ItemsPerBatchUnit",
+      "detail": "class ItemsPerBatchUnit existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::StepFuture",
+      "detail": "class StepFuture existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "config.py::TerminationMode",
+      "detail": "class TerminationMode existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "exceptions.py::CallableRuntimeErrorSerializableDetails",
+      "detail": "class CallableRuntimeErrorSerializableDetails existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "exceptions.py::CallbackError.__init__",
+      "detail": "method CallbackError.__init__ existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "lambda_service.py::ChainedInvokeFailedToStartType",
+      "detail": "class ChainedInvokeFailedToStartType existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "lambda_service.py::ChainedInvokeStopType",
+      "detail": "class ChainedInvokeStopType existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "lambda_service.py::ChainedInvokeTimeoutType",
+      "detail": "class ChainedInvokeTimeoutType existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "lambda_service.py::ErrorObject.to_callable_runtime_error",
+      "detail": "method ErrorObject.to_callable_runtime_error existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::MapExecutor.__init__",
+      "detail": "(self, executables, items, max_concurrency, completion_config, top_level_sub_type, iteration_sub_type, name_prefix, serdes, summary_generator, item_serdes, nesting_type, item_namer) -> (self, executables, items, max_concurrency, completion_config, top_level_sub_type, iteration_sub_type, name_prefix, serdes, operation_id_namespace, item_serdes, nesting_type); added operation_id_namespace; dropped summary_generator, item_namer",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::MapExecutor.execute_item",
+      "detail": "method MapExecutor.execute_item existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::MapExecutor.from_items",
+      "detail": "(cls, items, func, config) -> (cls, items, func, config, operation_id_namespace); added operation_id_namespace",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::MapExecutor.get_iteration_name",
+      "detail": "method MapExecutor.get_iteration_name existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::MapSummaryGenerator",
+      "detail": "class MapSummaryGenerator existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/map.py::map_handler",
+      "detail": "(items, func, config, execution_state, map_context, operation_identifier) -> (items, func, config, execution_state, map_context, operation_identifier, operation_id_namespace); added operation_id_namespace",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::ParallelExecutor.__init__",
+      "detail": "(self, executables, max_concurrency, completion_config, top_level_sub_type, iteration_sub_type, name_prefix, serdes, summary_generator, item_serdes, nesting_type) -> (self, executables, max_concurrency, completion_config, top_level_sub_type, iteration_sub_type, name_prefix, serdes, operation_id_namespace, item_serdes, nesting_type); added operation_id_namespace; dropped summary_generator",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::ParallelExecutor.execute_item",
+      "detail": "method ParallelExecutor.execute_item existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::ParallelExecutor.from_callables",
+      "detail": "(cls, callables, config) -> (cls, callables, config, operation_id_namespace); added operation_id_namespace",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::ParallelExecutor.get_iteration_name",
+      "detail": "method ParallelExecutor.get_iteration_name existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::ParallelSummaryGenerator",
+      "detail": "class ParallelSummaryGenerator existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "operation/parallel.py::parallel_handler",
+      "detail": "(callables, config, execution_state, parallel_context, operation_identifier) -> (callables, config, execution_state, parallel_context, operation_identifier, operation_id_namespace); added operation_id_namespace",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "plugin.py::InvocationEndInfo.from_durable_execution_invocation_output",
+      "detail": "(cls, invocation_start_info, output) -> (cls, invocation_start_info, output, operations); added operations",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "plugin.py::PluginExecutor.on_invocation_start",
+      "detail": "(self, execution_arn, is_first_invocation, execution_start_time, lambda_context) -> (self, execution_arn, is_first_invocation, execution_start_time, lambda_context, execution_input, operations_provider, updated_operation_ids); added execution_input, operations_provider, updated_operation_ids",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "plugin.py::PluginExecutor.on_operation_action",
+      "detail": "(self, update) -> (self, update, operation, previous_operation); added operation, previous_operation",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "plugin.py::PluginExecutor.on_user_function_end",
+      "detail": "(self, start_info, error) -> (self, start_info, error, outcome); added outcome",
+      "in_flight": false
+    },
+    {
+      "rule": "RD004",
+      "title": "Public signature changed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "plugin.py::UserFunctionEndInfo.from_start_info",
+      "detail": "(cls, start_info, error) -> (cls, start_info, error, outcome); added outcome",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "state.py::CheckpointedResult.raise_callable_error",
+      "detail": "method CheckpointedResult.raise_callable_error existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "waits.py::WaitDecision",
+      "detail": "class WaitDecision existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    },
+    {
+      "rule": "RD001",
+      "title": "Public symbol removed",
+      "severity": "medium",
+      "detection": "build",
+      "subject": "waits.py::WaitStrategyConfig.timeout_seconds",
+      "detail": "method WaitStrategyConfig.timeout_seconds existed in 1.7.0 and is gone in 2.0.0. Code referencing it fails at import.",
+      "in_flight": false
+    }
+  ],
+  "meta": {
+    "old_symbols": 560,
+    "new_symbols": 560,
+    "replaydrift_version": "0.1.0"
+  }
+}
