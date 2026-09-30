@@ -1,19 +1,20 @@
 # I broke twelve suspended Lambda executions on purpose. Three reported success.
 
-A Lambda durable function can sit suspended for up to a year. Your deploy
-pipeline doesn't know that, and it doesn't wait.
+A Lambda durable function can stay suspended for up to a year. Your deployment
+pipeline doesn't pause for it.
 
-Everyone has the same advice for this: pin your executions to a version or an
-alias, and don't rename steps. It's in the AWS docs, it's in the vendor blogs,
-it's in every getting-started post since durable functions went GA. What nobody
-says is what actually happens when you don't.
+The standard advice for that situation is to pin executions to a version or an
+alias and never rename a step. It's in the AWS docs, in vendor blog posts, and
+in most getting-started guides written since durable functions went GA. What
+none of them explain is what actually happens if you don't follow it.
 
-So I found out. Twelve scenarios, each one breaking a replay assumption on
-purpose against a live execution in a real account. 2026-09-16, us-east-1,
-`python3.13` on arm64, `aws-durable-execution-sdk-python` 1.7.0.
+I wanted to know, so I measured it. Twelve scenarios, each one deliberately
+violating a replay assumption against a live execution in a real account, on
+2026-09-16 in us-east-1, running `python3.13` on arm64 with
+`aws-durable-execution-sdk-python` 1.7.0.
 
-Three of the twelve corrupted the execution. All three said `SUCCEEDED`. Not
-one of the twelve failed cleanly.
+Three of the twelve corrupted the execution, and all three reported
+`SUCCEEDED`. None of the twelve produced a clean failure.
 
 ## The result
 
@@ -30,35 +31,36 @@ one of the twelve failed cleanly.
 | `d00-version-pinned` | redeploy against a pinned version | **insulated** |
 | `d07-alias-repointed` | alias moved to a new version | **insulated** |
 
-I went in assuming the status would tell me something. It didn't. A run that
-ends `FAILED` is the good outcome, because the platform noticed and told you.
-The one to worry about is `SUCCEEDED` over a workflow that quietly did the wrong
-thing, and I got three of those.
+Execution status turned out not to be useful for this. A scenario that ends in
+`FAILED` is actually the good outcome, because the platform detected the problem
+and reported it. The outcome to worry about is `SUCCEEDED` on a workflow that
+quietly did the wrong thing, and three of the scenarios produced that.
 
-The way I told them apart was crude and it worked: every step body does an
-atomic increment on a DynamoDB row. Count of 1, the checkpoint was honoured.
-Count of 2, the side effect ran again. No row at all, a step the code says
-should run never did.
+To distinguish the two, every step body performs an atomic increment on a
+DynamoDB row. A count of 1 means the checkpoint was honoured. A count of 2 means
+the side effect ran again. A missing row means a step that the code says should
+run never ran at all.
 
-## The worst one
+## The worst case
 
-`d05` swapped two steps while the execution was suspended. It finished
-`SUCCEEDED`, and:
+In `d05`, two steps were swapped while the execution was suspended. The
+execution finished with status `SUCCEEDED`, and:
 
 - `first` ran **twice**
 - `second` **never ran**
 
-If `first` is the card charge and `second` is the receipt, that's a double
-charge and no receipt, filed as a success. Nothing in the status, the execution
-history, or the error field says anything is wrong. I checked all three.
+If `first` charges a card and `second` sends the receipt, that's a double charge
+and no receipt, recorded as a successful workflow. Nothing in the execution
+status, the execution history, or the error field indicates that anything went
+wrong.
 
 ## Why it happens
 
-Checkpoints get matched to operations by their position in the sequence. Not by
-name. As far as I can tell, not by type either.
+Checkpoints are matched to operations by their position in the operation
+sequence, not by name, and as far as I can tell not by type either.
 
-I could see this in the operation IDs, which are stable hashes. Same slot, two
-different scenarios:
+The operation IDs show this. They're stable hashes, and here is the same slot
+across two different scenarios:
 
 | Slot | `d03-step-inserted` | `d05-step-reordered` |
 |---|---|---|
@@ -66,13 +68,13 @@ different scenarios:
 | 2nd operation | `c5faca15` — `pause` | `c5faca15` — `pause` |
 | 3rd operation | `6f760b9e` — **`pause`** | `6f760b9e` — **`step_one`** |
 
-`6f760b9e` is a WAIT in one run and a STEP in the other. The ID can't come from
-the name or the type, because both changed and it didn't. That only leaves
-position.
+`6f760b9e` is a WAIT in one scenario and a STEP in the other. The ID can't be
+derived from the name or the type, because both are different while the ID is
+the same. Position is the only thing left.
 
-Trace `d05` with that in mind. Before suspending, the original code had
-checkpointed two operations: `step_one` (a STEP) and `pause` (a WAIT). The code
-it resumed into was:
+Here is `d05` traced through that model. Before suspending, the original code
+had checkpointed two operations: `step_one` (a STEP) and `pause` (a WAIT). The
+code it resumed into was:
 
 ```python
 context.wait(duration=..., name="pause")            # position 0
@@ -80,93 +82,94 @@ context.step(record(run_id, "second"), "step_two")  # position 1
 context.step(record(run_id, "first"), "step_one")   # position 2
 ```
 
-- Position 0 is a `wait`. It picked up the checkpoint for a finished STEP and
+- Position 0 is a `wait`. It received the checkpoint of a completed STEP, so it
   didn't wait.
-- Position 1 is a `step`. It picked up the checkpoint for a finished WAIT, so
-  its body never ran and `second` was never recorded.
-- Position 2 found nothing left, so it ran for real. That's the second execution
-  of `first`.
+- Position 1 is a `step`. It received the checkpoint of a completed WAIT, so its
+  body never ran and `second` was never recorded.
+- Position 2 found no checkpoint left, so it executed for real. That is why
+  `first` ran a second time.
 
-`step_two` isn't in the execution history at all.
+`step_two` doesn't appear in the execution history at all.
 
-Everything else in the table follows from the same thing. Rename a step and
-nothing happens, because the name was never the identity. Refactor outside the
-steps and nothing happens, because the sequence didn't change. Insert or delete
-a step and every position after it shifts, and operations start eating each
-other's results.
+The other results follow from the same model. Renaming a step is harmless
+because the name was never the identity. Refactoring outside the steps is
+harmless because the sequence doesn't change. Inserting or deleting a step
+shifts every position after it, and operations start receiving each other's
+results.
 
-## Which is backwards from the advice
+## This is the opposite of the advice
 
-The advice is: treat step names as immutable IDs, never rename them. In this SDK
-version, renaming a step was the one code change I made that was completely
-harmless.
+The usual guidance is to treat step names as immutable IDs and never rename
+them. In this SDK version, renaming a step was the only code change I tested
+that was completely harmless.
 
-What actually matters is the sequence of durable operations before the point
-where your executions are parked, and I couldn't find anything that puts it
+What matters is the sequence of durable operations before the point where your
+executions are suspended, and I couldn't find any guidance that describes it
 that way. AWS's own
 [best-practices page](https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html)
-gets closest. It says in-flight executions "can fail to resume or produce
-incorrect results". Both outcomes, no indication of which you'll get. In twelve
-tries I never got the first one.
+comes closest. It says in-flight executions "can fail to resume or produce
+incorrect results", which names both outcomes without saying which one you get.
+In twelve scenarios I never got the first one.
 
-## The fix works, and it isn't discipline
+## The mitigation works
 
-Two scenarios tested the recommended mitigation. Both held.
+Two scenarios tested the recommended mitigation, and both held.
 
-`d00` started an execution on published version 1, then published a version 2
-with a renamed step. Published versions are immutable. The execution never saw
-it.
+`d00` ran an execution on published version 1, then published a version 2 with
+a renamed step. Published Lambda versions are immutable, so the execution was
+never affected.
 
-`d07` is the one I actually cared about, because it's what people do in
-practice: invoke through an alias, publish a new version on deploy, move the
-alias. I did that mid-suspend. The execution reported `Version='1'` the whole
-way through and finished on the original code.
+`d07` is the more realistic one, because it's what people actually do: invoke
+through an alias, publish a new version on each deploy, and move the alias. I
+did that while the execution was suspended. The execution reported `Version='1'`
+throughout and finished on the original code.
 
-Lambda resolves the alias once, when the execution starts, and that's the
-version it stays on for life.
+Lambda resolves the alias once, when the execution starts, and the execution
+stays on that version for its entire life.
 
-So the rule is mechanical, not a matter of being careful:
+So the rule is simple and mechanical:
 
 > Invoke durable functions through a published version or an alias. Every
-> corruption in this matrix needed `$LATEST`.
+> corruption in this matrix required `$LATEST`.
 
-## The one that surprised me
+## The result that surprised me
 
 I also swapped the bundled SDK from 1.7.0 to 2.0.0 underneath a suspended
-execution. Then back the other way. Both directions came through clean, every
-step body running exactly once.
+execution, and then back the other way. Both directions completed cleanly, with
+every step body running exactly once.
 
-I'm calling that out because I expected the opposite. My own static analysis
-had flagged this upgrade hard: 50 differences between those two versions, 12 of
-them able to reach an in-flight execution, including the checkpoint
+I'm pointing this out because I expected the opposite. My own static analysis
+had flagged this upgrade as risky: 50 differences between the two versions, 12
+of which can reach an in-flight execution, including changes to the checkpoint
 serialisation, the replay engine, and the exception hierarchy. Every public
-method on `DurableContext` is byte-for-byte identical across the bump.
-Everything under it moved.
+method on `DurableContext` is byte-for-byte identical across the bump, but the
+machinery underneath it changed substantially.
 
-And a checkpoint written by 1.7.0 was read fine by 2.0.0. The static analysis
-finds risk, not breakage, and for this workflow shape the risk didn't turn into
-anything.
+In practice, a checkpoint written by 1.7.0 was read correctly by 2.0.0. The
+static analysis identifies risk, not breakage, and for this workflow shape the
+risk didn't materialise.
 
-Which leaves an awkward asymmetry. The dependency upgrade, the change that gets
-a changelog read and a review and a staged rollout, did nothing. A routine
-reorder of two steps pushed to `$LATEST` double-ran a side effect. Nobody
-reviews a code edit as a durability risk. I didn't either, until I watched it.
+That leaves an uncomfortable asymmetry. The dependency upgrade, which is the
+kind of change that gets a changelog review and a staged rollout, did no damage.
+A routine reorder of two steps deployed to `$LATEST` silently ran a side effect
+twice. Code edits like that don't usually get reviewed as a durability risk.
 
-## What this doesn't show
+## What this doesn't establish
 
 - One account, one region, one runtime, one execution per scenario. These are
-  observations, not statistics. A scenario that survived once isn't safe, it
-  survived once.
-- The suspend was 90 seconds. A real execution parked for months crosses
-  platform changes I can't stage. That's the case the question is really about,
-  and it's still unmeasured.
-- Python only. The JS, Java and .NET SDKs have their own replay engines and
-  might do something else entirely.
-- `d10` is weaker than the table makes it look. The handler reads the drifting
+  observations, not a statistical characterisation. A scenario that survived
+  once isn't proven safe.
+- The suspend was 90 seconds. A real execution suspended for months would cross
+  platform changes that this harness can't stage. That's the case the question
+  is really about, and it's still unmeasured.
+- Python only. The JS, Java and .NET SDKs have their own replay engines and may
+  behave differently.
+- `d10` is weaker than it looks in the table. The handler reads the drifting
   environment variable but never branches on it, so it shows the value drifts
   without triggering the control-flow divergence AWS warns about.
-- The type-blindness, a `wait` happily taking a `step`'s checkpoint, is the part
-  most likely to be version-specific and the part I'd re-check first.
+- The type-blindness, where a `wait` accepts a `step`'s checkpoint without
+  complaint, is the part most likely to be version-specific and the first thing
+  I'd re-check.
 
 ## Run it yourself
 
@@ -178,11 +181,11 @@ replayguard probe --region us-east-1
 ```
 
 It creates one IAM role, one DynamoDB table and twelve short-lived Lambda
-functions, all prefixed `rd-`, and tears them all down afterwards. It checks
-they're gone with a direct `get_function` rather than trusting a list. Expect
-to spend well under $0.10.
+functions, all prefixed `rd-`, and tears them down afterwards. It verifies
+they're gone with a direct `get_function` call rather than relying on a list.
+Expected spend is well under $0.10.
 
-There's an offline half too, no AWS account needed:
+There's also an offline half that doesn't need an AWS account:
 
 ```bash
 replayguard drift 1.7.0 2.0.0 --fail-on-inflight
@@ -192,8 +195,9 @@ It compares two SDK versions and fails the build if anything in the upgrade can
 reach an execution that's already suspended.
 
 The raw output of the run above is in the repo as
-`drift-study/live-matrix.json`, and the findings document is generated from it,
-not written by hand. Every number here traces back to the run that produced it.
+`drift-study/live-matrix.json`, and the findings document is generated from it
+rather than written by hand, so every number here can be traced to the run that
+produced it.
 
 If you get a different result, especially on another runtime, I'd like to hear
 about it.
