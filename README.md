@@ -129,7 +129,7 @@ Handlers that suspend on a callback can't be replayed locally.
 Findings render inline on the pull request:
 
 ```yaml
-- uses: amrutp24/replayguard@v0.1.1
+- uses: amrutp24/replayguard@v0.2.0
   with:
     path: src/
 ```
@@ -141,7 +141,7 @@ As a pre-commit hook:
 
 ```yaml
 - repo: https://github.com/amrutp24/replayguard
-  rev: v0.1.1
+  rev: v0.2.0
   hooks:
     - id: replayguard
 ```
