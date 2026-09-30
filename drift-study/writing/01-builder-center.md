@@ -195,9 +195,10 @@ It compares two SDK versions and fails the build if anything in the upgrade can
 reach an execution that's already suspended.
 
 The raw output of the run above is in the repo as
-`drift-study/live-matrix.json`, and the findings document is generated from it
-rather than written by hand, so every number here can be traced to the run that
-produced it.
+[`drift-study/live-matrix.json`](https://github.com/amrutp24/replayguard/blob/main/drift-study/live-matrix.json),
+and [the findings document](https://github.com/amrutp24/replayguard/blob/main/drift-study/FINDINGS.md)
+is generated from it rather than written by hand, so every number here can be
+traced to the run that produced it.
 
 If you get a different result, especially on another runtime, I'd like to hear
 about it.
