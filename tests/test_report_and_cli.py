@@ -372,3 +372,47 @@ def test_probe_passes_its_arguments_through_to_the_runner(monkeypatch):
     assert seen["region"] == "eu-west-1"
     assert seen["wait_seconds"] == 30
     assert seen["keep"] is True
+
+
+# --------------------------------------------------------------------------
+# Shipped bug in 0.2.0: `probe --list` and `probe --report` crashed on a plain
+# `pip install replayguard`, because scenarios.py imported the deploy module at
+# top level and that imports botocore. Every test here passed, because the dev
+# environment has boto3. The only way to test "works without the extra" is to
+# take the extra away.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_boto(monkeypatch):
+    """Make `import boto3` / `import botocore` raise, as on a bare install.
+
+    A None entry in sys.modules makes the import machinery raise ImportError.
+    The probe modules are evicted too so the test sees a fresh import chain
+    rather than one cached from an earlier test that had boto available.
+    """
+    import sys
+
+    for name in list(sys.modules):
+        if name.startswith("replayguard.probe"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    for name in ("boto3", "botocore", "botocore.exceptions"):
+        monkeypatch.setitem(sys.modules, name, None)
+
+
+def test_probe_list_works_without_the_live_extra(no_boto, capsys):
+    assert cli.main(["probe", "--list"]) == 0
+    assert "d01-control" in capsys.readouterr().out
+
+
+def test_probe_report_works_without_the_live_extra(no_boto, tmp_path, capsys):
+    src = tmp_path / "live.json"
+    src.write_text(json.dumps([]), encoding="utf8")
+    assert cli.main(["probe", "--report", str(src)]) == 0
+    assert "Of 0 scenarios" in capsys.readouterr().out
+
+
+def test_the_live_path_still_reports_the_missing_extra_cleanly(no_boto, capsys):
+    """Without boto, running the probe must say so and exit 2, not traceback."""
+    assert cli.main(["probe", "--destroy"]) == 2
+    assert "boto3" in capsys.readouterr().err

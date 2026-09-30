@@ -33,7 +33,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from replayguard.probe import deploy as deploy_mod
+# deploy is imported inside the mutation closures, not here. It pulls in
+# botocore at import time, and this module is also what `probe --list` and
+# `probe --report` read -- both documented as needing no account and no extra.
+# A top-level import made them crash on a plain `pip install replayguard`, and
+# the tests never noticed because the dev environment has boto3.
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,8 @@ def _redeploy(**overrides):
     """A mutation that rebuilds and redeploys the function mid-suspend."""
 
     def apply(infra, name, *, wait_seconds, cache_dir):
+        from replayguard.probe import deploy as deploy_mod
+
         deploy_mod.deploy(
             infra, name, wait_seconds=wait_seconds, cache_dir=cache_dir, **overrides
         )
@@ -90,6 +96,8 @@ def _redeploy_and_move_alias(alias: str, **overrides):
     """
 
     def apply(infra, name, *, wait_seconds, cache_dir):
+        from replayguard.probe import deploy as deploy_mod
+
         resp = deploy_mod.deploy(
             infra,
             name,
