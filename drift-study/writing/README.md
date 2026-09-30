@@ -9,7 +9,7 @@ checklist.
 
 | File | Destination | Angle |
 |---|---|---|
-| `01-builder-center.md` | AWS Builder Center | The measured matrix and the mechanism behind it |
+| `01-builder-center.md` | [AWS Builder Center](https://builder.aws.com/content/3K20cq6Ykceez4S8Hfy41d2vqJU/i-broke-twelve-suspended-lambda-executions-on-purpose-three-reported-success) (published 2026-09-30) | The measured matrix and the mechanism behind it |
 | `02-medium.md` | Medium | Why durable execution has a failure class ordinary code cannot have |
 | `03-devto.md` | dev.to | The deploy checklist, shortest fix first |
 
