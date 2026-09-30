@@ -1,120 +1,91 @@
 # replayguard
 
-A determinism checker for AWS Lambda durable functions.
+Replay safety for AWS Lambda durable functions.
 
-Durable functions re-run your handler from the top on every resume. Completed
-steps aren't re-executed; the SDK returns the checkpointed result and the
-handler fast-forwards back to where it suspended. This only works if the
-handler takes the same path every time, and AWS's docs are explicit about
-whose job that is:
+[![PyPI](https://img.shields.io/pypi/v/replayguard)](https://pypi.org/project/replayguard/)
+[![Python](https://img.shields.io/pypi/pyversions/replayguard)](https://pypi.org/project/replayguard/)
+[![CI](https://github.com/amrutp24/replayguard/actions/workflows/ci.yml/badge.svg)](https://github.com/amrutp24/replayguard/actions/workflows/ci.yml)
+[![License](https://img.shields.io/pypi/l/replayguard)](LICENSE)
 
-> Any code that is not inside a durable operation must be a pure function of the
-> handler inputs and the results of completed operations.
+## What is it?
 
-No clocks, no randomness, no I/O, no writes to shared state outside a `step()`.
-Nothing enforces this. Break the rule and nothing throws, your tests stay
-green, and the bug surfaces whenever the workflow next resumes. An execution
-can suspend for up to 366 days, so that can be months later, in production.
-AWS's docs name double-charging as a possible consequence.
+A durable function is re-run from the top every time it resumes. Steps that
+already completed return their checkpointed result instead of executing again,
+and the handler fast-forwards to wherever it left off. That only works if two
+things hold: the handler takes the same path every time, and the code that
+resumes is the code that suspended.
 
-replayguard checks the rule two ways: statically, by analyzing handler source
-in Python, TypeScript, Java, and Rust, and dynamically, by running a handler
-twice under different clocks and diffing what it did.
+Nothing enforces either one. Break the first and nothing throws — your tests
+stay green and the bug shows up on the next resume, which can be up to 366 days
+later, in production. Break the second and the execution can finish with status
+`SUCCEEDED` having run a side effect twice or skipped one entirely.
 
-## Replay has two halves
+replayguard checks both halves: it lints your handler for determinism in four
+languages, replays it under a shifted clock to catch what a linter can't, and
+tells you whether an SDK upgrade or a deploy can reach an execution that is
+already suspended.
 
-That rule is only half of what replay requires. Written out:
+## Table of contents
 
-1. **Your handler must be deterministic** — the same inputs take the same path
-   every time. `replayguard check` and `replayguard replay` cover this.
-2. **The code that resumes an execution must match the code that suspended it.**
-   A durable execution can be suspended for up to 366 days. Your deploy pipeline
-   does not pause for it, so the handler that wakes up may not be the handler
-   that went to sleep. `replayguard drift` and `replayguard probe` cover this.
+- [Main features](#main-features)
+- [Where to get it](#where-to-get-it)
+- [Quick start](#quick-start)
+- [In CI](#in-ci)
+- [Rules](#rules)
+- [Drift: the other half of replay](#drift-the-other-half-of-replay)
+- [Language support](#language-support)
+- [What it doesn't do](#what-it-doesnt-do)
+- [Validation](#validation)
+- [Contributing](#contributing)
+- [Developing](#developing)
+- [Prior art](#prior-art)
+- [License](#license)
 
-The second half is not a determinism problem, and a determinism checker cannot
-see it. Measured, against a live account: a handler with no clocks, no
-randomness and no I/O outside a `step()` — one that `replayguard check` passes
-with zero findings — had two of its steps swapped while it was suspended, and
-finished with status `SUCCEEDED` having **run one side effect twice and skipped
-another entirely**.
+## Main features
 
-The code was correct. The code that resumed was not the code that suspended.
-That is the gap the `drift` and `probe` commands close.
+- **Static determinism check** across Python, TypeScript/JavaScript, Java and
+  Rust — five rules for clocks, I/O, captured state, nondeterministic control
+  flow and unstable step names, written once against a shared IR
+- **Replay-divergence harness** that runs a handler twice under different
+  clocks and entropy and diffs what it did, catching nondeterminism no static
+  rule covers
+- **SDK drift analysis** that compares two versions of the durable-execution
+  SDK and reports which changes can reach an execution that is already
+  suspended — offline, stdlib-only, made for CI
+- **A live probe** that suspends a real execution, changes something underneath
+  it on purpose, and records what the platform actually did
+- **SARIF output**, a GitHub Action and a pre-commit hook, so findings land on
+  the pull request that introduced them
+- **Honest coverage**: code whose region can't be resolved is reported as a
+  gap, not passed silently, so a clean run means something
 
-```bash
-replayguard check src/            # is this handler deterministic?
-replayguard replay app:handler    # does it diverge when replayed?
-
-replayguard drift 1.7.0 2.0.0     # will this SDK upgrade reach in-flight work?
-replayguard drift --sweep         # how often do upgrades carry that risk?
-replayguard probe                 # what does the platform actually do? (live)
-```
-
-### What the drift half found
-
-Twelve scenarios against a real account, 2026-09-16. **Three corrupted the
-execution. All three reported `SUCCEEDED`. None produced a clean failure.**
-
-Checkpoints are matched to operations **by position** — not by name, and not by
-type. So the standard advice is pointed at the wrong thing:
-
-| Change while suspended | Result |
-|---|---|
-| Rename a step | **safe** — the name was never the identity |
-| Edit code outside all steps | safe |
-| Insert a step before a completed one | inserted step never ran; a second wait created |
-| Delete a completed step | the step *after* it never ran |
-| **Reorder two steps** | **one side effect ran twice, another never ran** |
-| Bundled SDK 1.7.0 ⇄ 2.0.0 | safe, both directions |
-
-And the fix is mechanical rather than a matter of care: **every corruption
-required `$LATEST`.** Lambda resolves an alias once at execution start and pins
-the execution to that version for its whole life, so invoking through a version
-or an alias makes all of it unreachable.
-
-Full record in [drift-study/FINDINGS.md](drift-study/FINDINGS.md), the mechanism
-and how to falsify it in [drift-study/MECHANISM.md](drift-study/MECHANISM.md),
-raw run output in [drift-study/](drift-study/). `probe` creates billable AWS
-resources and ships a verified teardown; `drift` is offline and stdlib-only.
-
-## Status
-
-v0.1.1. Validated against 1,547 files of durable-function code written by
-other people; [VALIDATION.md](VALIDATION.md) records what that established and
-what it didn't.
-
-Two known gaps. Calls aren't followed across files, so a handler that reaches
-another module for its I/O passes clean. And three of the six rules have
-working detectors but no confirmed real-world finding yet, because published
-example code doesn't contain the mistakes they catch.
-
-Reports from real codebases are the most useful thing anyone can contribute
-right now, in either direction: a finding it caught, or a false positive it
-shouldn't have raised.
-
-## Install
+## Where to get it
 
 ```bash
 pip install replayguard
 ```
 
-TypeScript, Java, and Rust need a parser:
+TypeScript, Java and Rust need a parser; the live probe needs boto3:
 
 ```bash
 pip install 'replayguard[all]'
 ```
 
-## Use
+Python 3.11 or later. The static checker and drift analysis have no
+dependencies of their own.
+
+## Quick start
 
 ```bash
-replayguard check src/
-replayguard check src/ --explain
-replayguard check src/ --format sarif -o replayguard.sarif
+replayguard check src/                 # is this handler deterministic?
+replayguard replay app.orders:handler  # does it diverge when replayed?
+replayguard drift 1.7.0 2.0.0          # can this SDK upgrade reach in-flight work?
+replayguard rules --explain            # what each rule catches, and why
 ```
 
-Exits non-zero when anything at or above `--fail-on` (default `error`) is
-found, so it can gate a build without extra wiring.
+`check` exits non-zero when anything at or above `--fail-on` (default `error`)
+is found, so it gates a build without extra wiring. Add `--explain` for the
+rationale and the fix, or `--format sarif` for CI.
 
 ```
 tests/fixtures/python/bad_handler.py
@@ -126,10 +97,36 @@ tests/fixtures/python/bad_handler.py
     71:17  note    RG900  could not resolve whether this code runs inside a step
 ```
 
+`replay` runs the handler once normally and once with the clock moved and
+entropy reseeded, then diffs the operation journals. It needs no rule for the
+source of the nondeterminism — a clock inside a library, an iteration order, a
+value tainted several hops back — because it measures the effect, not the
+cause:
+
+```
+replay-divergence: 1 divergence(s) found.
+
+  operation 0: operation name changed -- the name depends on something nondeterministic
+    control   : step(op-1787442395)
+    perturbed : step(op-1787489626)
+```
+
+The same check works as a test, so a determinism regression fails the build
+rather than surfacing on a resume months later:
+
+```python
+from replayguard.dynamic import assert_deterministic
+
+def test_handler_is_deterministic():
+    assert_deterministic(handler, {"orderId": "A1"})
+```
+
+It can't prove determinism, only fail to disprove it, and the report says so.
+Handlers that suspend on a callback can't be replayed locally.
+
 ## In CI
 
-SARIF output means findings render inline on the pull request that introduced
-them:
+Findings render inline on the pull request:
 
 ```yaml
 - uses: amrutp24/replayguard@v0.1.1
@@ -140,7 +137,7 @@ them:
 The job needs `permissions: security-events: write` for the annotations. Set
 `fail-on: never` to annotate without blocking the merge.
 
-There is also a pre-commit hook:
+As a pre-commit hook:
 
 ```yaml
 - repo: https://github.com/amrutp24/replayguard
@@ -149,137 +146,138 @@ There is also a pre-commit hook:
     - id: replayguard
 ```
 
+To fail a build that would upgrade the SDK across a risky boundary:
+
+```bash
+replayguard drift $CURRENT $TARGET --fail-on-inflight
+```
+
 ## Rules
 
-| ID        | What it catches                                    | Why it breaks replay                                                                           |
-| --------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **RG001** | Clock, random, or identity source outside a step   | Produces a different value on replay; everything derived from it diverges                      |
-| **RG002** | Network or filesystem access outside a step        | Diverges, and repeats the side effect on every replay                                          |
-| **RG003** | A step body writing to state it doesn't own        | The write lands on the first run and is skipped on replay, so the outer state silently reverts |
-| **RG004** | Control flow depending on a nondeterministic value | Replay can take the other branch, so the operation sequence no longer matches the journal      |
-| **RG005** | A step name built from an unstable source          | Checkpoints match by name and order; a changed name can't be matched, so the step re-executes  |
-| **RG900** | Code whose region couldn't be resolved             | Not a violation. A coverage gap, reported so a clean run means something                       |
+| ID        | What it catches                                    | Why it matters                                                                                       |
+| --------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **RG001** | Clock, random, or identity source outside a step   | Produces a different value on replay; everything derived from it diverges                            |
+| **RG002** | Network or filesystem access outside a step        | Diverges, and repeats the side effect on every replay                                                |
+| **RG003** | A step body writing to state it doesn't own        | The write lands on the first run and is skipped on replay, so the outer state silently reverts       |
+| **RG004** | Control flow depending on a nondeterministic value | Replay can take the other branch, so the operation sequence no longer matches the journal            |
+| **RG005** | A step name built from an unstable source          | The name differs on every run; AWS treats step names as stable identifiers, and a handler can't rely on how a given SDK resolves a mismatch |
+| **RG900** | Code whose region couldn't be resolved             | Not a violation. A coverage gap, reported so a clean run means something                             |
 
-`replayguard rules --explain` prints the rationale for each.
+## Drift: the other half of replay
+
+A determinism check answers "will this code take the same path twice?" It
+cannot answer "is the code that wakes up the code that went to sleep?" — and a
+handler with no clocks, no randomness and no I/O outside a step, one that
+`replayguard check` passes with zero findings, can still be corrupted by a
+deploy that lands while it is suspended.
+
+That is measured, not supposed. Twelve scenarios against a live account, each
+breaking a replay assumption on purpose:
+
+| Changed while suspended                | What happened                                     |
+| -------------------------------------- | ------------------------------------------------- |
+| Rename a step                          | safe — the name was never the identity            |
+| Edit code outside all steps            | safe                                              |
+| Insert a step before a completed one   | inserted step never ran; a second wait was created |
+| Delete a completed step                | the step *after* it never ran                     |
+| **Reorder two steps**                  | **one side effect ran twice, another never ran**  |
+| Upgrade or roll back the SDK           | safe, both directions                             |
+
+Three of twelve corrupted the execution. All three reported `SUCCEEDED`. None
+produced a clean failure. Checkpoints turned out to be matched by position, not
+by name — which inverts the usual advice — and every corruption required the
+execution to be running on `$LATEST`. Pin to a version or an alias and none of
+it is reachable.
+
+```bash
+replayguard drift 1.7.0 2.0.0   # compare two SDK versions, offline
+replayguard drift --sweep       # every adjacent release pair
+replayguard probe --list        # the live scenarios
+replayguard probe               # run them against your own account
+```
+
+`drift` is stdlib-only and safe to run anywhere. `probe` needs
+`pip install 'replayguard[live]'`, creates billable AWS resources — all prefixed
+`rd-` — and tears them down afterwards, verifying by direct lookup rather than
+absence from a list. Expected spend is well under $0.10.
+
+The full record is in [drift-study/](drift-study/): the findings, the mechanism
+and how to falsify it, and the raw run output the findings are generated from.
 
 ## Language support
 
-Python, TypeScript/JavaScript, and Java are the three runtimes with an
-official AWS durable execution SDK. Rust has no official SDK; the frontend
-targets [pgdad/durable-rust](https://github.com/pgdad/durable-rust), whose own
-documentation says its determinism rules are documented rather than enforced.
-Go and .NET have community proofs of concept only and are out of scope for
-now.
+Python, TypeScript/JavaScript and Java are the runtimes with an official AWS
+durable execution SDK. Rust has no official SDK; the frontend targets
+[pgdad/durable-rust](https://github.com/pgdad/durable-rust). Go and .NET are
+out of scope for now.
 
-| Runtime                 | Parser       |
-| ----------------------- | ------------ |
-| Python                  | stdlib `ast` |
-| TypeScript / JavaScript | tree-sitter  |
-| Java                    | tree-sitter  |
-| Rust                    | tree-sitter  |
+| Runtime                 | Parser       | Handler                     | Step                              |
+| ----------------------- | ------------ | --------------------------- | --------------------------------- |
+| Python                  | stdlib `ast` | `@durable_execution`        | `context.step(fn, name="x")`      |
+| TypeScript / JavaScript | tree-sitter  | `withDurableExecution(fn)`  | `context.step("x", fn)`           |
+| Java                    | tree-sitter  | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)` |
+| Rust                    | tree-sitter  | param typed `*Context`      | `ctx.step("x", \|\| async { .. })` |
 
-The SDKs differ in shape, not just syntax:
+Everything lowers to one shared IR, and the rules are written once with no
+knowledge of which language they're inspecting. The one place language
+semantics matter is RG003, a step body writing to state it doesn't own:
 
-|        | Handler                     | Step                               |
-| ------ | --------------------------- | ---------------------------------- |
-| Python | `@durable_execution`        | `context.step(fn, name="x")`       |
-| JS/TS  | `withDurableExecution(fn)`  | `context.step("x", fn)`            |
-| Java   | `extends DurableHandler<,>` | `ctx.step("x", Result.class, fn)`  |
-| Rust   | param typed `*Context`      | `ctx.step("x", \|\| async { .. })` |
-
-The step body sits in a different argument position in each, and Java has a
-two-argument overload besides, so bodies are located by kind rather than by
-position. Everything lowers to one shared IR and the rules are written once,
-with no knowledge of which language they're inspecting.
-
-The semantic differences that matter are handled per-frontend, and RG003 is
-where they show up:
-
-- **Python**: a bare `x = 1` in a nested function creates a local binding, so
-  it can never be an outer write. Only mutation and `global`/`nonlocal` reach
-  out.
-- **JavaScript**: the same assignment writes straight through to the enclosing
-  scope, so RG003 has more ways to fire.
-- **Java**: captured locals must be effectively final, so reassigning one is a
-  compile error and that violation class can't exist. What remains is
-  collection mutation and field writes.
-- **Rust**: the narrowest of the four. Step closures are `Send + 'static`, so
-  capturing a borrowed reference doesn't compile. What's left is interior
-  mutability through a shared handle, like an `Arc<Mutex<_>>` locked and
-  pushed to, or a `static mut`.
-
-## Design
+- **Python** — a bare `x = 1` in a nested function creates a local binding, so
+  only mutation and `global`/`nonlocal` reach out
+- **JavaScript** — the same assignment writes straight through to the enclosing
+  scope, so there are more ways to fire
+- **Java** — captured locals must be effectively final, so what remains is
+  collection mutation and field writes
+- **Rust** — step closures are `Send + 'static`, so what's left is interior
+  mutability through a shared handle, like an `Arc<Mutex<_>>`
 
 ```
 source ──▶ frontend ──▶ IR ──▶ rules ──▶ findings ──▶ reporter
            (per-lang)  (shared) (shared)              text/json/sarif
 ```
 
-This is AST analysis, not pattern matching, because the questions need scope
-resolution: RG003 has to know whether a mutated name belongs to the step body
-or an enclosing scope, and RG004 has to know whether a branch condition
-derives from a nondeterministic source. Neither can be answered by matching
-source text.
-
-False positives get particular attention, since a linter that fires on
-correct code gets uninstalled. RG005 ignores computed step names unless they
-interpolate something genuinely unstable (`` `item-${index}` `` is the pattern
-AWS recommends), and RG900 reports unresolved regions instead of silently
-passing them.
+This is AST analysis with scope resolution, not pattern matching. RG003 has to
+know whether a mutated name belongs to the step body or an enclosing scope;
+RG004 has to know whether a branch condition derives from a nondeterministic
+source. Neither can be answered by matching text.
 
 ## What it doesn't do
 
-Calls are not followed across file boundaries. Within a file they are, and
-findings name the route, but a handler that calls into another module for its
-I/O will pass clean. This is the largest known blind spot.
-
-Static analysis also can't see nondeterminism inside a third-party library,
-data tainted several hops back, iteration order over an unordered collection,
-or concurrent completion order. Some of that the dynamic half can catch.
-
-## Dynamic replay-divergence
-
-The static rules reason about what code might do. The dynamic harness runs
-the handler twice, once normally and once with the clock moved and entropy
-reseeded, and diffs the operation journals:
-
-```bash
-replayguard replay app.orders:handler --event '{"orderId": "A1"}'
-```
-
-```
-replay-divergence: 1 divergence(s) found.
-
-  operation 0: operation name changed -- checkpoints match by name
-    control   : step(op-1787442395)
-    perturbed : step(op-1787489626)
-```
-
-Or as an assertion next to the handler, so a determinism regression fails the
-build instead of surfacing on a resume months later:
-
-```python
-from replayguard.dynamic import assert_deterministic
-
-def test_handler_is_deterministic():
-    assert_deterministic(handler, {"orderId": "A1"})
-```
-
-The harness needs no rule for the source of nondeterminism. A clock inside a
-library, an iteration order, a value tainted many hops back: it measures the
-effect, not the cause. On 51 AWS conformance handlers it produced zero false
-alarms; on a handler whose step order comes from `random.sample`, which no
-static rule covers, it diverges.
-
-It can't prove determinism, only fail to disprove it, and the report says so.
-Handlers that suspend on a callback can't be checked locally.
+- **Calls are not followed across files.** Within a file they are, and findings
+  name the route, but a handler that reaches another module for its I/O passes
+  clean. This is the largest known blind spot.
+- Static analysis can't see nondeterminism inside a third-party library, data
+  tainted several hops back, iteration order over an unordered collection, or
+  concurrent completion order. The replay harness catches some of that.
+- The drift analysis compares source surfaces. It flags risk, not breakage: a
+  finding means "look here", and the live probe is what establishes whether it
+  breaks anything. Our own headline upgrade, 1.7.0 to 2.0.0, was flagged hardest
+  and did no damage when run live.
+- The live probe measures one runtime, one SDK version, one execution per
+  scenario, with 90-second suspends. It is evidence, not a statistical
+  characterisation.
 
 ## Validation
 
-[VALIDATION.md](VALIDATION.md) records what has been tested against whose
-code: which rules have confirmed real-world findings, which are still
-unproven, the false positives that were found and fixed, and the bugs the
-validation found in the tool itself. Read it before relying on a clean run.
+Validated against 1,547 files of durable-function code written by other people.
+[VALIDATION.md](VALIDATION.md) records what that established and what it
+didn't: which rules have confirmed real-world findings, which have working
+detectors but no confirmed finding yet, the false positives that were found and
+fixed, and the bugs the validation found in the tool itself. Read it before
+relying on a clean run.
+
+## Contributing
+
+Reports from real codebases are the most useful thing anyone can contribute, in
+either direction: a finding it caught, or a false positive it shouldn't have
+raised. Three of the six rules have working detectors and no confirmed
+real-world finding yet, because published example code doesn't contain the
+mistakes they catch — if your code does, please
+[open an issue](https://github.com/amrutp24/replayguard/issues).
+
+Results from the live probe on other runtimes or SDK versions are equally
+welcome. The JavaScript, Java and .NET SDKs have their own replay engines and
+may not behave the way the Python one did.
 
 ## Developing
 
@@ -290,16 +288,21 @@ python scripts/verify.py
 
 `verify.py` runs five gates: import, lint, tests with a coverage floor, the
 CLI's exit codes and output formats, and a canary asserting the known-good
-fixtures produce zero findings in every language. The canary matters most; a
-false positive is a worse failure here than a missed bug.
+fixtures produce zero findings in every language. CI runs the same script on
+Python 3.11 and 3.13, then runs the checker over its own fixtures and exercises
+the GitHub Action as a consumer would.
 
 ## Prior art
 
-[Temporal's workflowcheck](https://github.com/temporalio/sdk-go) does this for
-Temporal workflows, so the category is proven; it just didn't exist for AWS's
-primitive. [durable-viz](https://github.com/gunnargrosch/durable-viz)
-statically analyses durable handlers to draw flowcharts, but performs no
-validation.
+[Temporal's workflowcheck](https://github.com/temporalio/sdk-go) does the
+static half for Temporal workflows, so the category is proven.
+[durable-viz](https://github.com/gunnargrosch/durable-viz) analyses durable
+handlers to draw flowcharts but performs no validation. AWS's own
+[testing SDK](https://github.com/aws/aws-durable-execution-sdk-js) replays your
+handler against one SDK version; the drift analysis here compares one SDK
+version against another, which is a different axis. Azure publishes a
+[formal versioning guide](https://learn.microsoft.com/en-us/azure/durable-task/durable-functions/durable-functions-versioning)
+for the same problem; AWS has no equivalent document.
 
 ## License
 
