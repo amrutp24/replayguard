@@ -183,8 +183,18 @@ def rg004_nondeterministic_branch(h: Handler) -> Iterator[Finding]:
 def rg005_dynamic_step_name(h: Handler) -> Iterator[Finding]:
     """RG005 - a step name that isn't a stable literal.
 
-    Checkpoints are matched by name and order. A name containing a timestamp or
-    a uuid cannot be matched on resume, so the step re-executes.
+    A name built from a clock or a random source differs on every run, so the
+    operation's recorded identity is never the same twice. That is
+    nondeterminism by definition, and AWS treats step names as stable
+    identifiers: renaming one mid-flight, it says, can fail to resume or produce
+    incorrect results.
+
+    What the platform does with a changed name is an implementation detail.
+    The drift study measured the Python SDK matching checkpoints by *position*
+    and completing a renamed step without re-executing it
+    (drift-study/MECHANISM.md) -- an earlier version of this docstring claimed
+    the opposite. A handler cannot rely on either behaviour, which is why the
+    rule is about stability of the name, not about what a mismatch triggers.
     """
     for step in h.steps:
         if step.name_is_static:
@@ -204,9 +214,10 @@ def rg005_dynamic_step_name(h: Handler) -> Iterator[Finding]:
             loc=step.loc,
             severity=Severity.ERROR,
             confidence=Confidence.HIGH,
-            rationale="Checkpoints are matched by name and order. A name that "
-            "differs between the original run and the replay will not match, "
-            "and the operation re-executes.",
+            rationale="The name differs on every run, so the operation's "
+            "recorded identity never matches itself. AWS treats step names as "
+            "stable identifiers; whether a given SDK matches by name or by "
+            "position is an implementation detail a handler cannot rely on.",
             fix="Use a stable literal name. To distinguish loop iterations, "
             "derive the suffix from checkpointed data (an index or a step "
             "result), never from a clock or a random source.",

@@ -122,7 +122,7 @@ def _compare(control: Journal, other: Journal) -> list[Divergence]:
         if (a.kind, a.name, a.depth) == (b.kind, b.name, b.depth):
             continue
         if a.name != b.name and a.kind == b.kind:
-            reason = "operation name changed -- checkpoints match by name"
+            reason = "operation name changed -- the name depends on something nondeterministic"
         elif a.kind != b.kind:
             reason = "different operation kind -- control flow diverged"
         else:
