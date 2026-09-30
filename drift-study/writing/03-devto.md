@@ -125,8 +125,8 @@ nothing in your editor or your type checker notices.
 I wrote a tool for this. It is stdlib-only and needs no AWS account:
 
 ```bash
-pip install replaydrift
-replaydrift diff 1.7.0 2.0.0
+pip install replayguard
+replayguard drift 1.7.0 2.0.0
 ```
 
 ```
@@ -149,7 +149,7 @@ exception is a small change that reaches production intact.
 In CI:
 
 ```bash
-replaydrift diff $CURRENT_SDK $TARGET_SDK --fail-on-inflight
+replayguard drift $CURRENT_SDK $TARGET_SDK --fail-on-inflight
 ```
 
 Exits non-zero if the upgrade contains anything that can reach a suspended
@@ -169,7 +169,7 @@ both ways. The static analysis flags *risk*, not *breakage*. Treat a finding as
 - [ ] Code review treats **inserting, deleting or reordering** `step()` /
       `wait()` calls as a durability change, not a refactor
 - [ ] Renaming a step is understood to be safe, so nobody wastes review time on it
-- [ ] SDK upgrades run `replaydrift diff --fail-on-inflight` in CI
+- [ ] SDK upgrades run `replayguard drift --fail-on-inflight` in CI
 - [ ] You know your longest possible suspension, because that is how long old
       code has to stay compatible
 
@@ -192,12 +192,12 @@ behave differently. If you test one, I would like to see the result.
 ## Run it against your own account
 
 ```bash
-pip install 'replaydrift[live]'
-replaydrift run --region us-east-1
+pip install 'replayguard[live]'
+replayguard probe --region us-east-1
 ```
 
 Twelve scenarios, about 45 minutes, well under $0.10. Everything it creates is
 prefixed `rd-` and torn down afterwards, verified by direct `get_function` rather
 than absence from a list.
 
-Code and raw results: [github.com/amrutp24/replaydrift](https://github.com/amrutp24/replaydrift)
+Code and raw results: [github.com/amrutp24/replayguard](https://github.com/amrutp24/replayguard)

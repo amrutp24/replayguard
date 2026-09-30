@@ -170,11 +170,11 @@ reviews a code edit as a durability risk.
 
 ## Run it yourself
 
-The harness is [replaydrift](https://github.com/amrutp24/replaydrift), MIT.
+The harness ships inside [replayguard](https://github.com/amrutp24/replayguard) as the `probe` and `drift` commands, MIT.
 
 ```bash
-pip install 'replaydrift[live]'
-replaydrift run --region us-east-1
+pip install 'replayguard[live]'
+replayguard probe --region us-east-1
 ```
 
 It creates one IAM role, one DynamoDB table and twelve short-lived Lambda
@@ -185,14 +185,14 @@ under $0.10.
 There is also an offline half that needs no AWS account:
 
 ```bash
-replaydrift diff 1.7.0 2.0.0 --fail-on-inflight
+replayguard drift 1.7.0 2.0.0 --fail-on-inflight
 ```
 
 which compares two SDK versions and fails a build if anything in the upgrade can
 reach an execution that is already suspended.
 
 The raw output of the run above is committed in the repo as
-`results/live-matrix.json`, and the findings document is generated from it rather
+`drift-study/live-matrix.json`, and the findings document is generated from it rather
 than written by hand — so every number here can be traced to the run that
 produced it.
 

@@ -13,11 +13,11 @@ checklist.
 | `02-medium.md` | Medium | Why durable execution has a failure class ordinary code cannot have |
 | `03-devto.md` | dev.to | The deploy checklist, shortest fix first |
 
-Every number in all three traces to `results/live-matrix.json` or
-`results/sdk-python-sweep.json` in this repo. Before publishing any of them,
+Every number in all three traces to `drift-study/live-matrix.json` or
+`drift-study/sdk-python-sweep.json` in this repo. Before publishing any of them,
 re-run the fact check:
 
-    replaydrift report results/live-matrix.json --out FINDINGS.md
+    replayguard probe --report drift-study/live-matrix.json --out FINDINGS.md
 
 and confirm the counts still match what the posts claim. If a post and the data
 disagree, the data is right.

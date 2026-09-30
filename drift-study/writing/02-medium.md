@@ -179,7 +179,7 @@ know. In my case the answer was: nothing at all, loudly reported as success.
 ---
 
 *The harness is open source at
-[github.com/amrutp24/replaydrift](https://github.com/amrutp24/replaydrift) — it
-runs the full matrix against your own account in about 45 minutes and tears
+[github.com/amrutp24/replayguard](https://github.com/amrutp24/replayguard), as
+`replayguard probe` — it runs the full matrix against your own account in about 45 minutes and tears
 everything down afterwards. The raw results are committed in the repo, and the
 findings document is generated from them rather than written by hand.*
