@@ -220,7 +220,10 @@ re-executed: `first` ran once, and `second` never ran because the execution
 stopped first. The error for the swap reads:
 
 ```
-Non-deterministic operation identity at id='1ced8f5be2db23a6513eba4d819c73806424748a7bc6fa0d792cc1c7d1775a97': type checkpoint='STEP' current='WAIT', subtype checkpoint='Step' current='Wait', name checkpoint='step_one...
+Non-deterministic operation identity at id='1ced8f5be2db23a6513eba4d819c73806424748a7bc6fa0d792cc1c7d1775a97':
+  type checkpoint='STEP' current='WAIT'
+  subtype checkpoint='Step' current='Wait'
+  name checkpoint='step_one' current='pause'
 ```
 
 The raw record is in `drift-study/live-matrix-sdk-2.0.0.json`.
