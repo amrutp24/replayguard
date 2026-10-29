@@ -416,3 +416,77 @@ def test_the_live_path_still_reports_the_missing_extra_cleanly(no_boto, capsys):
     """Without boto, running the probe must say so and exit 2, not traceback."""
     assert cli.main(["probe", "--destroy"]) == 2
     assert "boto3" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# --sdk: the bundled SDK version is chosen at run time. It has to reach every
+# deploy() that did not pin one, including the mutation redeploy, which is a
+# second call the initial deploy never sees.
+# --------------------------------------------------------------------------
+
+
+def test_deploy_honours_default_sdk_set_after_import(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    import replayguard.probe.deploy as deploy_mod
+
+    recorded = []
+
+    def fake_build_zip(**kwargs):
+        recorded.append(kwargs["sdk_version"])
+        return b"x"
+
+    class FakeLambda:
+        def get_function(self, **kwargs):
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "nope"}},
+                "GetFunction",
+            )
+
+        def create_function(self, **kwargs):
+            return {"Version": "1"}
+
+        def get_waiter(self, name):
+            class Waiter:
+                def wait(self, **kwargs):
+                    return None
+
+            return Waiter()
+
+        def get_function_configuration(self, **kwargs):
+            return {"LastUpdateStatus": "Successful"}
+
+    class FakeInfra:
+        table = "t"
+        role_arn = "arn:aws:iam::123456789012:role/x"
+
+        def __init__(self):
+            self.lam = FakeLambda()
+
+    monkeypatch.setattr(deploy_mod, "build_zip", fake_build_zip)
+    monkeypatch.setattr(deploy_mod, "DEFAULT_SDK", "9.9.9")
+
+    infra = FakeInfra()
+    deploy_mod.deploy(infra, "fn")  # no pin: must follow DEFAULT_SDK
+    deploy_mod.deploy(infra, "fn", sdk_version="1.7.0")  # explicit pin wins
+    deploy_mod.deploy(infra, "fn", sdk_version=None)  # None still means bundle nothing
+    assert recorded == ["9.9.9", "1.7.0", None]
+
+
+def test_probe_sdk_flag_sets_the_default_before_running(monkeypatch):
+    """--sdk must land before run_matrix, so every unpinned deploy sees it."""
+    import replayguard.probe.deploy as deploy_mod
+    import replayguard.probe.runner as runner
+
+    # Setting the attribute to its own value makes monkeypatch restore it on teardown.
+    monkeypatch.setattr(deploy_mod, "DEFAULT_SDK", deploy_mod.DEFAULT_SDK)
+    seen = {}
+
+    def fake_run_matrix(scenarios, **kwargs):
+        seen["sdk"] = deploy_mod.DEFAULT_SDK
+        return []
+
+    monkeypatch.setattr(runner, "run_matrix", fake_run_matrix)
+    code = cli.main(["probe", "d02-step-renamed", "--sdk", "2.0.0"])
+    assert code == 0
+    assert seen["sdk"] == "2.0.0"

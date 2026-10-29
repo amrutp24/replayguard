@@ -28,6 +28,14 @@ DEFAULT_RUNTIME = "python3.13"
 DEFAULT_SDK = "1.7.0"
 SDK_PACKAGE = "aws-durable-execution-sdk-python"
 
+# Sentinel for "the caller did not choose an SDK". Deliberately not None, because
+# None is a real answer (bundle nothing). deploy() resolves it against DEFAULT_SDK
+# at call time, so the CLI can change DEFAULT_SDK after import and every deploy
+# that did not pin a version picks it up -- including the mutation redeploys in
+# scenarios.py, which run long after the initial deploy. A default argument bound
+# at import time could not be overridden later.
+_UNSET = object()
+
 
 def build_zip(
     *,
@@ -69,7 +77,7 @@ def deploy(
     *,
     body: str = "baseline",
     wait_seconds: int = 90,
-    sdk_version: str | None = DEFAULT_SDK,
+    sdk_version: str | None | object = _UNSET,
     runtime: str = DEFAULT_RUNTIME,
     memory: int = 512,
     probe: str = "initial",
@@ -77,6 +85,8 @@ def deploy(
     cache_dir: Path | None = None,
 ) -> dict:
     """Create or update the function, returning the create/update response."""
+    if sdk_version is _UNSET:
+        sdk_version = DEFAULT_SDK
     code = build_zip(
         body=body, wait_seconds=wait_seconds, sdk_version=sdk_version, cache_dir=cache_dir
     )

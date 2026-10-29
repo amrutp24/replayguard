@@ -364,7 +364,8 @@ def run_matrix(
 
     print(
         "This creates real AWS resources (Lambda functions, an IAM role, a "
-        "DynamoDB table), all prefixed 'rd-'. Expected spend is well under $0.10."
+        "DynamoDB table), all prefixed 'rd-'. Expected spend is well under $0.10. "
+        f"SDK {deploy_mod.DEFAULT_SDK} unless a scenario pins its own."
     )
     print(f"Running {len(scenarios)} scenario(s) with a {wait_seconds}s suspend each.\n")
 

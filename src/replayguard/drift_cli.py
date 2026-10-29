@@ -75,6 +75,12 @@ def add_parsers(sub) -> None:
         action="store_true",
         help="skip teardown (leaves billable resources in the account)",
     )
+    p.add_argument(
+        "--sdk",
+        default=None,
+        metavar="VERSION",
+        help="bundle this durable-SDK version for scenarios that do not pin one (default 1.7.0)",
+    )
     p.set_defaults(func=_cmd_probe)
 
 
@@ -217,6 +223,13 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     except KeyError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    from .probe import deploy as deploy_mod
+
+    # Set before run_matrix so the initial deploy and every mutation redeploy
+    # that does not pin its own SDK all bundle the same version.
+    if args.sdk:
+        deploy_mod.DEFAULT_SDK = args.sdk
 
     run_matrix(
         chosen,
