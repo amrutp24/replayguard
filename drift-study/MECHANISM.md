@@ -114,3 +114,16 @@ the published advice:
 The reliable mitigation is not code discipline at all. It is
 [`d00-version-pinned`](README.md): a published Lambda version is immutable, so an
 execution pinned to one cannot be reached by any of this.
+
+## Falsified for 2.0.0, 2026-10-29
+
+The first falsification condition above is met on
+`aws-durable-execution-sdk-python` 2.0.0: a step consuming a wait's checkpoint
+raises rather than accepting it. The mechanism is `OperationIdentifier.
+validate_checkpoint` in `identifier.py`, new in 2.0.0 and called from
+`operation/base.py` before any checkpoint is used. It compares type, subtype,
+name and parent id and raises `NonDeterministicExecutionError`. Measured:
+`d02` and `d05` re-run on 2.0.0 both end `FAILED`, `first`=1, `second` never
+runs. The id is still positional (`blake2b(str(counter))`, `context.py`), so
+the model's description of *identity* stands; what 2.0.0 adds is a check that
+the checkpoint at that position belongs to the operation asking for it.

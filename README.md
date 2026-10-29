@@ -189,6 +189,14 @@ by name — which inverts the usual advice — and every corruption required the
 execution to be running on `$LATEST`. Pin to a version or an alias and none of
 it is reachable.
 
+**That was SDK 1.7.0.** Version 2.0.0 (2026-09-09) adds `validate_checkpoint`,
+which compares a checkpoint's type, subtype, name and parent to the operation
+consuming it and raises `NonDeterministicExecutionError` on a mismatch. Re-run
+on 2.0.0 on 2026-10-29, the rename and the reorder both fail cleanly with
+nothing re-executed ([`drift-study/live-matrix-sdk-2.0.0.json`](drift-study/live-matrix-sdk-2.0.0.json)).
+The mitigation is the same on both versions; what 2.0 changes is that the
+silent cases become loud ones. The release notes do not mention it.
+
 ```bash
 replayguard drift 1.7.0 2.0.0   # compare two SDK versions, offline
 replayguard drift --sweep       # every adjacent release pair

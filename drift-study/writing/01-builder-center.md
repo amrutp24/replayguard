@@ -202,3 +202,39 @@ traced to the run that produced it.
 
 If you get a different result, especially on another runtime, I'd like to hear
 about it.
+
+## Update, 2026-10-29: this is 1.7.0 behaviour. 2.0.0 fixes it.
+
+Everything above was measured on `aws-durable-execution-sdk-python` 1.7.0.
+Version 2.0.0, released on 2026-09-09, a week before these runs, adds a check I
+didn't know about when I published. Before a step or a wait consumes a
+checkpoint on replay, the SDK now compares the checkpoint's type, subtype, name
+and parent against the operation asking for it, and raises
+`NonDeterministicExecutionError` if any of them differ. The release notes don't
+mention it. I found it by reading the 2.0.0 source after the article went out.
+
+I re-ran the two scenarios that mattered on 2.0.0 on 2026-10-29, same account
+and region. Renaming a completed step (`d02`) and swapping two steps (`d05`)
+both ended `FAILED` with that error, and the side-effect counter shows nothing
+re-executed: `first` ran once, and `second` never ran because the execution
+stopped first. The error for the swap reads:
+
+```
+Non-deterministic operation identity at id='1ced8f5be2db23a6513eba4d819c73806424748a7bc6fa0d792cc1c7d1775a97': type checkpoint='STEP' current='WAIT', subtype checkpoint='Step' current='Wait', name checkpoint='step_one...
+```
+
+The raw record is in `drift-study/live-matrix-sdk-2.0.0.json`.
+
+So the SDK version matters more than I gave it credit for. On 1.7.0, a
+mid-flight reorder is silent corruption reported as success. On 2.0.0 it's a
+clean failure, which is what the AWS documentation always said would happen.
+The positional matching itself hasn't changed. What changed is that the SDK now
+refuses to use a checkpoint that doesn't belong to the operation at that
+position. The advice at the end still stands: pin to a version or an alias and
+none of this is reachable on either SDK. If you're on 1.x, upgrading to 2.0
+turns the silent cases into loud ones, and that's worth knowing because the
+quickstart still installs 1.x.
+
+The last caveat in the original said the type-blindness was the part most
+likely to be version-specific and the first thing to re-check. It was, and I
+should have re-checked it before publishing rather than after.

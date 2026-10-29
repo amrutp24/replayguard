@@ -1,0 +1,80 @@
+[
+  {
+    "scenario": "d02-step-renamed",
+    "question": "What happens when a completed step is renamed mid-flight?",
+    "advice": "AWS: don't rename steps or change their behaviour in ways that break replay; doing so while executions are in progress means they can fail to resume or produce incorrect results. Both outcomes are named. Which one you get is not. (Lambda dev guide, durable-best-practices)",
+    "mutation": "renamed step_one to step_one_renamed on $LATEST while suspended",
+    "run_id": "d02-step-renamed-a1728042",
+    "execution_arn": "arn:aws:lambda:us-east-1:320908173170:function:rd-d02-step-renamed:$LATEST/durable-execution/d02-step-renamed-a1728042/f7886282-b8ea-3940-86ff-d242941dce1d",
+    "pinned_version": "$LATEST",
+    "status": "FAILED",
+    "error": {
+      "ErrorMessage": "Non-deterministic operation identity at id='1ced8f5be2db23a6513eba4d819c73806424748a7bc6fa0d792cc1c7d1775a97': name checkpoint='step_one' current='step_one_renamed'",
+      "ErrorType": "aws_durable_execution_sdk_python.exceptions.NonDeterministicExecutionError"
+    },
+    "result": null,
+    "side_effects": {
+      "first": 1
+    },
+    "final_build": {},
+    "initial_build": {
+      "variant": "baseline",
+      "probe": "initial",
+      "sdk": "2.0.0"
+    },
+    "events": [
+      "ExecutionStarted",
+      "StepStarted",
+      "StepSucceeded",
+      "WaitStarted",
+      "InvocationCompleted",
+      "WaitSucceeded",
+      "InvocationCompleted",
+      "ExecutionFailed"
+    ],
+    "suspended_after_s": 11.1,
+    "total_s": 101.6,
+    "notes": [],
+    "verdict": "clean-failure",
+    "mutation_reached": null
+  },
+  {
+    "scenario": "d05-step-reordered",
+    "question": "What happens when two steps swap order across a suspend?",
+    "advice": "Community guidance: do not reorder steps.",
+    "mutation": "swapped step_one and step_two",
+    "run_id": "d05-step-reordered-c5bf8642",
+    "execution_arn": "arn:aws:lambda:us-east-1:320908173170:function:rd-d05-step-reordered:$LATEST/durable-execution/d05-step-reordered-c5bf8642/1b25ca62-9547-32f0-a3c4-2d110aea5cc2",
+    "pinned_version": "$LATEST",
+    "status": "FAILED",
+    "error": {
+      "ErrorMessage": "Non-deterministic operation identity at id='1ced8f5be2db23a6513eba4d819c73806424748a7bc6fa0d792cc1c7d1775a97': type checkpoint='STEP' current='WAIT', subtype checkpoint='Step' current='Wait', name checkpoint='step_one' current='pause'",
+      "ErrorType": "aws_durable_execution_sdk_python.exceptions.NonDeterministicExecutionError"
+    },
+    "result": null,
+    "side_effects": {
+      "first": 1
+    },
+    "final_build": {},
+    "initial_build": {
+      "variant": "baseline",
+      "probe": "initial",
+      "sdk": "2.0.0"
+    },
+    "events": [
+      "ExecutionStarted",
+      "StepStarted",
+      "StepSucceeded",
+      "WaitStarted",
+      "InvocationCompleted",
+      "WaitSucceeded",
+      "InvocationCompleted",
+      "ExecutionFailed"
+    ],
+    "suspended_after_s": 8.3,
+    "total_s": 99.4,
+    "notes": [],
+    "verdict": "clean-failure",
+    "mutation_reached": null
+  }
+]
